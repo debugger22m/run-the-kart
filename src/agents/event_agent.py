@@ -66,10 +66,9 @@ Discard events with expected_attendance < 200.
 
 ## Step 4 — Score each event
 
-For every event:
-1. Call `forecast_demand` (event_id, event_category, expected_attendance, duration_hours)
-2. Call `score_event_opportunity` (event_id, demand_score, start_hour, duration_hours, estimated_revenue)
-3. Discard events with opportunity_score < 40.
+Call `forecast_demand` for ALL events in a single batch, then call `score_event_opportunity`
+for ALL events in a single batch. Do not interleave — batch each tool across all events before
+moving to the next tool. Discard events with opportunity_score < 40.
 
 ## Step 5 — Return results
 
@@ -99,6 +98,7 @@ class EventAgent(BaseAgent):
             name="EventAgent",
             system_prompt=SYSTEM_PROMPT,
             tools=EVENT_TOOLS,
+            max_iterations=20,
         )
         self.load_skill(DemandForecastingSkill())
 
