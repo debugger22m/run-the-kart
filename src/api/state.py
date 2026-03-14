@@ -7,6 +7,7 @@ import os
 from ..models import Cart, Coordinates, Fleet
 from ..models.cart import CartStatus
 from ..agents import OrchestratorAgent
+from .loop import AutonomousLoop
 
 
 class AppState:
@@ -31,3 +32,4 @@ class AppState:
             self.fleet.add_cart(cart)
 
         self.orchestrator = OrchestratorAgent(self.fleet)
+        self.loop = AutonomousLoop(self.orchestrator)

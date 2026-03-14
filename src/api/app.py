@@ -14,9 +14,10 @@ logging.basicConfig(level=os.getenv("LOG_LEVEL", "INFO"))
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    """Initialise shared state on startup; clean up on shutdown."""
+    """Initialise shared state on startup; stop the loop cleanly on shutdown."""
     app.state.app = AppState()
     yield
+    await app.state.app.loop.stop()
 
 
 def create_app() -> FastAPI:
