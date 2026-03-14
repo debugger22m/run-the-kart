@@ -1,126 +1,198 @@
-# Run The Kart 🛻
+# 🛺 Run The Kart
 
-Autonomous fleet management for food trucks, powered by Claude AI agents.
+**Autonomous food truck fleet management powered by Claude AI agents.**
+
+Deploy a fleet of food trucks to the highest-value events in any US city — fully autonomously, with zero human input after startup.
+
+---
+
+## How It Works
+
+Every 10 seconds, three AI agents collaborate to manage the fleet:
+
+### 1. Event Agent
+Calls the **Ticketmaster Discovery API** to find real events happening near the operating city. Scores each event using a demand forecasting model:
+- **Demand score** — estimated customers/hour based on attendance × category conversion rate (sports: 10%, festivals: 15%, etc.)
+- **Opportunity score** — demand score + time-of-day bonus + duration + revenue potential, capped at 100
+- Drops events scoring below 40
+
+### 2. Scheduler Agent (Claude — reasoning only)
+Receives the scored event list and all idle cart positions. In a **single LLM call** it:
+- Assigns the nearest idle cart to each high-value event
+- Enforces geographic spread — no clustering all carts at one venue
+- Prevents double-booking — each cart_id appears at most once
+- Allows 2 carts at venues with attendance > 5,000
+- Estimates revenue per assignment: `attendance × conversion_rate × avg_order_value`
+
+### 3. Orchestrator
+- Auto-expires schedules when `departure_time` passes → carts return to idle automatically
+- Pins search centre to the selected city (overrides fleet centroid)
+- Fires an immediate cycle on city change — no waiting for the loop timer
+- Runs continuously on a 10-second interval with no human input
+
+---
+
+## Autonomous Workflow (per cycle)
+
+```
+Boot
+ └─ Autonomous loop starts (10s interval)
+      └─ Every tick:
+           1. Expire finished schedules → carts go idle
+           2. Resolve search centre (city override > fleet centroid)
+           3. EventAgent → Ticketmaster API → score + rank events
+           4. SchedulerAgent → Claude LLM → assign idle carts to events
+           5. Apply assignments → carts go en_route
+           6. Sleep 10s → repeat
+```
+
+---
 
 ## Architecture
 
 ```
-                    ┌─────────────────────┐
-                    │  OrchestratorAgent  │
-                    │  (coordinates flow) │
-                    └────────┬────────────┘
+                    ┌──────────────────────┐
+                    │   OrchestratorAgent  │  ← runs every 10s, no human input
+                    │   + AutonomousLoop   │
+                    └────────┬─────────────┘
                              │
                ┌─────────────┴─────────────┐
                ▼                           ▼
    ┌───────────────────┐       ┌───────────────────────┐
    │    EventAgent     │       │    SchedulerAgent     │
-   │  Finds local      │──────▶│  Assigns carts to     │
-   │  events via LLM   │       │  events via LLM       │
+   │  Ticketmaster API │──────▶│  Claude (reasoning)   │
+   │  + demand scoring │       │  revenue optimisation │
    └───────────────────┘       └───────────────────────┘
-           │                            │
-   ┌───────┴───────┐           ┌────────┴────────┐
-   │  event_tools  │           │   maps_tools    │
-   │  (mock/real)  │           │  (mock/real)    │
-   └───────────────┘           └─────────────────┘
+         Skills                       Skills
+   DemandForecastingSkill       FleetOptimizationSkill
 ```
 
-### Key Classes
+### Key classes
 
 | Class | File | Description |
-|-------|------|-------------|
-| `Cart` | `src/models/cart.py` | A single food truck — has status, location, and assignment |
-| `Fleet` | `src/models/fleet.py` | Manages a collection of `Cart` objects |
-| `Schedule` | `src/models/schedule.py` | A cart-to-event assignment with timing and revenue data |
-| `Event` | `src/models/schedule.py` | An event the fleet can serve (embedded in `Schedule`) |
-| `EventAgent` | `src/agents/event_agent.py` | Discovers and ranks nearby events using Claude |
-| `SchedulerAgent` | `src/agents/scheduler_agent.py` | Assigns carts to events using Claude |
-| `OrchestratorAgent` | `src/agents/orchestrator.py` | Top-level coordinator of the two agents |
+|---|---|---|
+| `Cart` | `src/models/cart.py` | Single food truck — status, GPS, assignment |
+| `Fleet` | `src/models/fleet.py` | Manages the cart collection |
+| `Schedule` | `src/models/schedule.py` | Cart-to-event assignment with timing + revenue |
+| `EventAgent` | `src/agents/event_agent.py` | Discovers and scores events via Ticketmaster |
+| `SchedulerAgent` | `src/agents/scheduler_agent.py` | Assigns carts via Claude (one-shot JSON) |
+| `OrchestratorAgent` | `src/agents/orchestrator.py` | Coordinates both agents, manages fleet state |
+| `AutonomousLoop` | `src/api/loop.py` | Background asyncio task — runs every N seconds |
+
+---
 
 ## Setup
 
 ```bash
-# 1. Create and activate a virtual environment
+# 1. Clone and create virtual environment
+git clone https://github.com/debugger22m/run-the-kart.git
+cd run-the-kart
 python3 -m venv .venv
-source .venv/bin/activate   # macOS / Linux
-# .venv\Scripts\activate    # Windows
+source .venv/bin/activate
 
 # 2. Install dependencies
 pip install -r requirements.txt
 
 # 3. Configure environment
 cp .env.example .env
-# Open .env and set your ANTHROPIC_API_KEY
+```
+
+Edit `.env`:
+
+```env
+ANTHROPIC_API_KEY=sk-ant-...          # Required — get at console.anthropic.com
+
+TICKETMASTER_API_KEY=...              # Optional — free at developer.ticketmaster.com
+                                      # Without this, rotating SLC mock events are used
+
+LOOP_INTERVAL_SECONDS=10             # How often the autonomous loop fires
+DEMO_EXPIRE_SECS=45                  # Schedules expire after N seconds (demo mode)
+DEFAULT_FLEET_NAME=KartFleet
+LOG_LEVEL=INFO
 ```
 
 ## Running
 
-### API Server
-
 ```bash
 source .venv/bin/activate
-python3 main.py server
-# Server starts at http://localhost:8000
-# Interactive docs at http://localhost:8000/docs
+python3 start.sh
 ```
 
-### CLI (single cycle)
+Open **http://localhost:8000** — the autonomous loop starts immediately.
 
-```bash
-source .venv/bin/activate
-python3 main.py run --lat 37.7749 --lng -122.4194 --radius 10
-```
+---
 
-## API Endpoints
+## Live Dashboard
+
+- **Map** (Leaflet + OpenStreetMap) — cart markers update every 5s
+  - 🟢 Green pulse = idle, awaiting assignment
+  - 🔵 Blue = en route to an event
+  - 🟣 Purple = event venue
+- **City search** — type any US city, hit Go. Fleet relocates and pulls live events immediately.
+- **Activity log** — real-time cycle events, deployments, expiries
+- **Loop status** — cycle count, interval, last run
+- **Revenue estimate** — projected earnings across all active deployments
+
+---
+
+## API Reference
 
 | Method | Path | Description |
-|--------|------|-------------|
-| `GET` | `/api/v1/fleet` | Fleet overview and status breakdown |
-| `GET` | `/api/v1/fleet/carts` | List all carts |
-| `POST` | `/api/v1/fleet/carts` | Add a cart to the fleet |
-| `DELETE` | `/api/v1/fleet/carts/{id}` | Remove a cart |
-| `GET` | `/api/v1/schedules` | List active schedules |
-| `POST` | `/api/v1/schedules/complete` | Mark a schedule as completed |
-| `POST` | `/api/v1/orchestrate` | **Trigger a full AI orchestration cycle** |
+|---|---|---|
+| `GET` | `/` | Live dashboard UI |
+| `GET` | `/api/v1/dashboard` | All UI data in one call |
+| `POST` | `/api/v1/city` | Change city, reposition fleet, trigger immediate cycle |
+| `GET` | `/api/v1/fleet` | Fleet overview + loop status |
+| `GET` | `/api/v1/fleet/carts` | All carts |
+| `POST` | `/api/v1/fleet/carts` | Add a cart |
+| `GET` | `/api/v1/schedules` | Active deployments |
+| `POST` | `/api/v1/schedules/complete` | Manually complete a schedule |
+| `POST` | `/api/v1/orchestrate` | Trigger a single cycle manually |
+| `POST` | `/api/v1/autonomous/start` | Start the loop (auto-starts on boot) |
+| `POST` | `/api/v1/autonomous/stop` | Stop the loop |
+| `GET` | `/api/v1/autonomous/status` | Loop status + cycle history |
 
-### Example: trigger orchestration
-
-```bash
-curl -X POST http://localhost:8000/api/v1/orchestrate \
-  -H "Content-Type: application/json" \
-  -d '{"latitude": 37.7749, "longitude": -122.4194, "radius_km": 10, "hours_ahead": 12}'
-```
-
-## Swapping Mocks for Real APIs
-
-The mock tool handlers are clearly separated from their schemas:
-
-- **Events**: Edit `src/tools/event_tools.py` — replace `_search_local_events`, `_get_event_details`, `_estimate_foot_traffic` with real Eventbrite / Ticketmaster API calls.
-- **Maps / Routing**: Edit `src/tools/maps_tools.py` — replace handlers with Google Maps Directions / Distance Matrix API calls.
-
-The agent and orchestrator code does not need to change.
+---
 
 ## Project Structure
 
 ```
 run-the-kart/
+├── start.sh                     # Server entry point (loads .env + starts uvicorn)
 ├── main.py                      # CLI entry point
 ├── requirements.txt
-├── .env.example
-├── src/
-│   ├── agents/
-│   │   ├── base.py              # Shared agentic loop (tool-use handling)
-│   │   ├── orchestrator.py      # Top-level coordinator
-│   │   ├── event_agent.py       # Event discovery agent
-│   │   └── scheduler_agent.py   # Cart scheduling agent
-│   ├── models/
-│   │   ├── cart.py              # Cart + CartStatus + Coordinates
-│   │   ├── fleet.py             # Fleet (manages Cart collection)
-│   │   └── schedule.py          # Schedule + Event + ScheduleStatus
-│   ├── tools/
-│   │   ├── event_tools.py       # Claude tool schemas + mock handlers
-│   │   └── maps_tools.py        # Claude tool schemas + mock handlers
-│   └── api/
-│       ├── app.py               # FastAPI app factory
-│       ├── state.py             # Shared app state (fleet + orchestrator)
-│       └── routes.py            # All REST endpoints
+├── Procfile                     # For Railway / Heroku deployment
+├── ui/
+│   └── index.html               # Single-page live dashboard
+└── src/
+    ├── agents/
+    │   ├── base.py              # Agentic loop (tool-use, skill routing)
+    │   ├── orchestrator.py      # Top-level coordinator + autonomous loop
+    │   ├── event_agent.py       # Event discovery + demand scoring
+    │   └── scheduler_agent.py   # Revenue-optimised cart assignment
+    ├── models/
+    │   ├── cart.py              # Cart, CartStatus, Coordinates
+    │   ├── fleet.py             # Fleet
+    │   └── schedule.py          # Schedule, Event, ScheduleStatus
+    ├── tools/
+    │   ├── event_tools.py       # Ticketmaster API + mock fallback
+    │   └── maps_tools.py        # Haversine routing (swap for Google Maps)
+    ├── skills/
+    │   ├── demand_forecasting.py
+    │   └── fleet_optimization.py
+    └── api/
+        ├── app.py               # FastAPI factory + lifespan (auto-starts loop)
+        ├── state.py             # Shared state (fleet + orchestrator)
+        ├── loop.py              # AutonomousLoop background task
+        └── routes.py            # All REST endpoints
 ```
+
+---
+
+## Deployment (Railway — free)
+
+1. Push to GitHub
+2. Go to [railway.app](https://railway.app) → New Project → Deploy from GitHub
+3. Set env vars: `ANTHROPIC_API_KEY`, `TICKETMASTER_API_KEY`, `DEMO_EXPIRE_SECS=45`
+4. Start command: `python3 start.sh`
+5. Railway provides a public URL automatically
