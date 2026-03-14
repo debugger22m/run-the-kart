@@ -4,6 +4,8 @@
 
 Deploy a fleet of food trucks to the highest-value events in any US city — fully autonomously, with zero human input after startup.
 
+![Run The Kart Dashboard](assets/dashboard.png)
+
 ---
 
 ## How It Works
