@@ -1,0 +1,31 @@
+{
+  "version": 2,
+  "buildCommand": "",
+  "outputDirectory": "ui",
+  "rewrites": [
+    {
+      "source": "/api/v1/dashboard",
+      "destination": "https://epkmgltaqkojjnmohyfv.supabase.co/functions/v1/dashboard"
+    },
+    {
+      "source": "/api/v1/fleet/:path*",
+      "destination": "https://epkmgltaqkojjnmohyfv.supabase.co/functions/v1/fleet/:path*"
+    },
+    {
+      "source": "/api/v1/schedules/:path*",
+      "destination": "https://epkmgltaqkojjnmohyfv.supabase.co/functions/v1/schedules/:path*"
+    },
+    {
+      "source": "/api/v1/orchestrate",
+      "destination": "https://epkmgltaqkojjnmohyfv.supabase.co/functions/v1/orchestrate"
+    },
+    {
+      "source": "/api/v1/autonomous/:path*",
+      "destination": "https://epkmgltaqkojjnmohyfv.supabase.co/functions/v1/autonomous/:path*"
+    },
+    {
+      "source": "/api/v1/city",
+      "destination": "https://epkmgltaqkojjnmohyfv.supabase.co/functions/v1/city"
+    }
+  ]
+}

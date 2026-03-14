@@ -84,6 +84,8 @@ async def add_cart(request: Request, body: AddCartRequest):
         max_orders_per_hour=body.max_orders_per_hour,
     )
     state.fleet.add_cart(cart)
+    fleet_id = state.fleet.id
+    await state.fleet_repo.insert_cart(cart, fleet_id)
     return {"message": "Cart added", "cart_id": cart.id, "cart": cart.model_dump_summary()}
 
 
@@ -93,6 +95,7 @@ async def remove_cart(request: Request, cart_id: str):
     removed = state.fleet.remove_cart(cart_id)
     if not removed:
         raise HTTPException(status_code=404, detail=f"Cart {cart_id} not found")
+    await state.fleet_repo.delete_cart(cart_id)
     return {"message": "Cart removed", "cart_id": cart_id}
 
 
@@ -119,7 +122,7 @@ async def list_schedules(request: Request):
 @router.post("/schedules/complete", summary="Mark a schedule as completed")
 async def complete_schedule(request: Request, body: CompleteScheduleRequest):
     state = get_state(request)
-    success = state.orchestrator.complete_schedule(body.schedule_id)
+    success = await state.orchestrator.complete_schedule_async(body.schedule_id)
     if not success:
         raise HTTPException(status_code=404, detail=f"Schedule {body.schedule_id} not found")
     return {"message": "Schedule completed", "schedule_id": body.schedule_id}

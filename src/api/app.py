@@ -11,6 +11,7 @@ from dotenv import load_dotenv
 from .routes import router
 from .state import AppState
 from .loop import LoopConfig
+from ..db import create_supabase_client
 
 load_dotenv()
 logging.basicConfig(level=os.getenv("LOG_LEVEL", "INFO"))
@@ -21,10 +22,13 @@ _LOOP_INTERVAL = int(os.getenv("LOOP_INTERVAL_SECONDS", "30"))
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     """
-    Startup: initialise shared state and auto-start the autonomous loop.
+    Startup: initialise Supabase client, load fleet state, auto-start the loop.
     Shutdown: gracefully stop the loop.
     """
-    state = AppState()
+    supabase = await create_supabase_client()
+    app.state.supabase = supabase
+
+    state = await AppState.create(supabase)
     app.state.app = state
 
     # Auto-start — no lat/lng needed; centroid is derived from the fleet each cycle.
