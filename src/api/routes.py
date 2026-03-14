@@ -1,4 +1,6 @@
-from fastapi import APIRouter, HTTPException, Request
+from typing import Optional
+
+from fastapi import APIRouter, Body, HTTPException, Request
 from pydantic import BaseModel
 
 from ..models import Cart, Coordinates
@@ -25,10 +27,12 @@ class AddCartRequest(BaseModel):
 
 
 class OrchestrationRequest(BaseModel):
-    latitude: float | None = None   # derived from fleet positions if omitted
-    longitude: float | None = None  # derived from fleet positions if omitted
+    latitude: Optional[float] = None
+    longitude: Optional[float] = None
     radius_km: float = 10.0
     hours_ahead: int = 12
+
+    model_config = {"extra": "ignore"}
 
 
 class CompleteScheduleRequest(BaseModel):
@@ -36,8 +40,8 @@ class CompleteScheduleRequest(BaseModel):
 
 
 class AutonomousStartRequest(BaseModel):
-    latitude: float | None = None   # derived from fleet positions if omitted
-    longitude: float | None = None  # derived from fleet positions if omitted
+    latitude: Optional[float] = None   # derived from fleet positions if omitted
+    longitude: Optional[float] = None  # derived from fleet positions if omitted
     radius_km: float = 10.0
     hours_ahead: int = 12
     interval_seconds: int = 30
@@ -114,19 +118,19 @@ async def complete_schedule(request: Request, body: CompleteScheduleRequest):
 # ---------------------------------------------------------------------------
 
 @router.post("/orchestrate", summary="Trigger a single orchestration cycle manually")
-async def orchestrate(request: Request, body: OrchestrationRequest):
+async def orchestrate(
+    request: Request,
+    radius_km: float = 10.0,
+    hours_ahead: int = 12,
+):
     """
-    Runs EventAgent + SchedulerAgent once:
-      1. Discovers today's local events near the given coordinates.
-      2. Assigns available carts to the best events.
-      3. Returns the full result including schedules and fleet state.
+    Runs one full EventAgent → SchedulerAgent cycle.
+    Search centre is automatically derived from the fleet's cart positions.
     """
     state = get_state(request)
     result = await state.orchestrator.run_cycle(
-        latitude=body.latitude,
-        longitude=body.longitude,
-        radius_km=body.radius_km,
-        hours_ahead=body.hours_ahead,
+        radius_km=radius_km,
+        hours_ahead=hours_ahead,
     )
     return result.to_dict()
 
@@ -136,21 +140,24 @@ async def orchestrate(request: Request, body: OrchestrationRequest):
 # ---------------------------------------------------------------------------
 
 @router.post("/autonomous/start", summary="Start the autonomous orchestration loop")
-async def start_autonomous(request: Request, body: AutonomousStartRequest):
+async def start_autonomous(
+    request: Request,
+    radius_km: float = 10.0,
+    hours_ahead: int = 12,
+    interval_seconds: int = 30,
+):
     """
-    Starts the autonomous loop that runs a full orchestration cycle every
-    `interval_seconds` seconds without any manual intervention.
+    Starts the autonomous loop. Runs every `interval_seconds` seconds with no
+    manual input — search centre is derived from fleet positions each cycle.
     """
     state = get_state(request)
     if state.loop.is_running():
         raise HTTPException(status_code=409, detail="Autonomous loop is already running. Stop it first.")
 
     config = LoopConfig(
-        latitude=body.latitude,
-        longitude=body.longitude,
-        radius_km=body.radius_km,
-        hours_ahead=body.hours_ahead,
-        interval_seconds=body.interval_seconds,
+        radius_km=radius_km,
+        hours_ahead=hours_ahead,
+        interval_seconds=interval_seconds,
     )
     await state.loop.start(config)
     return {"message": "Autonomous loop started", "config": config.__dict__}
