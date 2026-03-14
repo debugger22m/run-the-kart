@@ -176,11 +176,11 @@
     /* ── Activity log ────────────────────────────────────────────────── */
     #activity-log {
       display: flex;
-      flex-direction: column-reverse;
-      gap: 4px;
-      max-height: 180px;
+      flex-direction: column;
+      gap: 2px;
+      max-height: 260px;
       overflow-y: auto;
-      font-size: 11px;
+      font-size: 12px;
     }
     #activity-log::-webkit-scrollbar { width: 3px; }
     #activity-log::-webkit-scrollbar-thumb { background: var(--border); }
@@ -188,17 +188,20 @@
     .log-entry {
       display: flex;
       gap: 8px;
-      padding: 3px 0;
+      padding: 5px 0;
       border-bottom: 1px solid #1a1f27;
       animation: fadein .3s ease;
+      line-height: 1.4;
     }
     @keyframes fadein { from { opacity: 0; transform: translateY(-4px); } to { opacity: 1; transform: none; } }
 
-    .log-time { color: var(--muted); flex-shrink: 0; }
+    .log-time { color: var(--muted); flex-shrink: 0; font-size: 11px; padding-top: 1px; }
+    .log-msg { flex: 1; }
     .log-msg.green { color: var(--green); }
     .log-msg.blue  { color: var(--blue); }
     .log-msg.orange { color: var(--orange); }
     .log-msg.red   { color: var(--red); }
+    .log-msg.purple { color: var(--purple); }
 
     /* ── Refresh indicator ───────────────────────────────────────────── */
     #refresh-bar {
@@ -430,7 +433,7 @@ const SLC = [40.7608, -111.8910];
 
 const map = L.map('map', {
   center: SLC,
-  zoom: 13,
+  zoom: 14,
   zoomControl: true,
 });
 
@@ -522,12 +525,22 @@ async function refresh() {
   // ── Detect new cycles ──────────────────────────────────────────────
   if (loop.cycle_count > prevCycleCount) {
     const recent = loop.recent_cycles ?? [];
-    const last   = recent[recent.length - 1];
-    if (last) {
-      const expired = last.expired_schedules || 0;
-      const created = last.schedules_created || 0;
-      const evts    = last.events_found || 0;
-      log(`Cycle #${last.cycle}: ${evts} events · ${created} deployed · ${expired} freed`, 'blue');
+    // Log all newly completed cycles
+    for (const c of recent) {
+      if (c.cycle > prevCycleCount) {
+        const expired = c.expired_schedules || 0;
+        const created = c.schedules_created || 0;
+        const evts    = c.events_found || 0;
+        if (c.errors && c.errors.length > 0) {
+          log(`⚠ Cycle #${c.cycle}: ${c.errors[0].slice(0, 60)}…`, 'red');
+        } else if (created > 0) {
+          log(`✦ Cycle #${c.cycle} — ${created} carts deployed to ${evts} events`, 'purple');
+        } else if (expired > 0) {
+          log(`↺ Cycle #${c.cycle} — ${expired} schedules expired, carts freed`, 'orange');
+        } else {
+          log(`· Cycle #${c.cycle} — ${evts} events found, all carts busy`, 'blue');
+        }
+      }
     }
     prevCycleCount = loop.cycle_count;
   }
@@ -588,7 +601,7 @@ async function refresh() {
 
       // Line from staging (no fixed staging lat — just marker for now)
       cartMarkers[cid] = { marker, line: null };
-      log(`🛺 Cart deployed → ${s.event_name}`, 'green');
+      log(`🛺 Cart → ${s.event_name} · $${Math.round(s.estimated_revenue||0).toLocaleString()}`, 'green');
     } else {
       const m = cartMarkers[cid].marker;
       m.setLatLng([lat, lng]);
@@ -620,9 +633,9 @@ async function refresh() {
       m.setPopupContent(`<b>${c.name}</b><br>⚡ Idle — awaiting assignment`);
     }
 
-    // Log newly idle carts (just returned from deployment)
+    // Log carts that just returned from deployment
     if (!prevIdleIds.has(c.id) && prevScheduleIds.size > 0) {
-      log(`✅ Cart returned to idle`, 'orange');
+      log(`✅ ${c.name} returned to idle — ready for next assignment`, 'orange');
     }
   }
 
