@@ -217,7 +217,10 @@ async def set_city(request: Request, body: CityRequest):
         )
         cart.go_idle()
 
-    # Update the autonomous loop's fixed search centre
+    # Pin the orchestrator's search centre to this city (highest priority)
+    state.orchestrator.set_city(body.name, body.lat, body.lng)
+
+    # Also update loop config so status endpoint shows the right centre
     if state.loop.status.config:
         state.loop.status.config.latitude  = body.lat
         state.loop.status.config.longitude = body.lng
@@ -255,10 +258,10 @@ async def dashboard(request: Request):
     ]
 
     import os
-    cfg = state.loop.status.config
     city = {
-        "lat": cfg.latitude if cfg else None,
-        "lng": cfg.longitude if cfg else None,
+        "name": state.orchestrator._city_name,
+        "lat":  state.orchestrator._city_override[0] if state.orchestrator._city_override else None,
+        "lng":  state.orchestrator._city_override[1] if state.orchestrator._city_override else None,
         "events_source": "ticketmaster" if os.getenv("TICKETMASTER_API_KEY") else "mock",
     }
 

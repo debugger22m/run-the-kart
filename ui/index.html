@@ -270,6 +270,66 @@
       transition: transform linear;
     }
 
+    /* ── Loading overlay ─────────────────────────────────────────────── */
+    #loading-overlay {
+      display: none;
+      position: fixed;
+      inset: 0;
+      background: rgba(13,17,23,.75);
+      z-index: 9999;
+      align-items: center;
+      justify-content: center;
+      flex-direction: column;
+      gap: 16px;
+      backdrop-filter: blur(4px);
+    }
+    #loading-overlay.active { display: flex; }
+
+    .spinner {
+      width: 40px; height: 40px;
+      border: 3px solid var(--border);
+      border-top-color: var(--accent);
+      border-radius: 50%;
+      animation: spin .8s linear infinite;
+    }
+    @keyframes spin { to { transform: rotate(360deg); } }
+
+    #loading-msg { font-size: 14px; color: var(--text); font-weight: 500; }
+
+    /* ── Toast ───────────────────────────────────────────────────────── */
+    #toast-container {
+      position: fixed;
+      bottom: 24px;
+      left: 50%;
+      transform: translateX(-50%);
+      z-index: 9998;
+      display: flex;
+      flex-direction: column;
+      gap: 8px;
+      align-items: center;
+      pointer-events: none;
+    }
+
+    .toast {
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      padding: 10px 18px;
+      font-size: 13px;
+      font-weight: 500;
+      box-shadow: 0 4px 20px rgba(0,0,0,.4);
+      animation: toast-in .3s ease;
+      pointer-events: auto;
+    }
+    .toast.green { border-color: var(--green); color: var(--green); }
+    .toast.red   { border-color: var(--red);   color: var(--red); }
+    .toast.blue  { border-color: var(--blue);  color: var(--blue); }
+
+    @keyframes toast-in {
+      from { opacity: 0; transform: translateY(12px); }
+      to   { opacity: 1; transform: none; }
+    }
+
     /* ── Map ─────────────────────────────────────────────────────────── */
     #map-wrap { flex: 1; position: relative; }
     #map { width: 100%; height: 100%; }
@@ -379,7 +439,7 @@
 
     <div id="sidebar-header">
       <h1><span class="logo-icon">🛺</span> Run The Kart</h1>
-      <div class="subtitle">Autonomous Fleet Command</div>
+      <div class="subtitle">Autonomous Fleet Command · <span id="current-city">Salt Lake City, UT</span></div>
       <form id="city-form" onsubmit="return false;">
         <input id="city-input" type="text" placeholder="Enter city (e.g. Austin, TX)" autocomplete="off" />
         <button id="city-btn" type="submit">Go</button>
@@ -489,6 +549,15 @@
 
 </div><!-- /app -->
 
+<!-- Loading overlay -->
+<div id="loading-overlay">
+  <div class="spinner"></div>
+  <div id="loading-msg">Relocating fleet…</div>
+</div>
+
+<!-- Toast container -->
+<div id="toast-container"></div>
+
 <script>
 // ═══════════════════════════════════════════════════════════════════════════
 // Map init — Leaflet + OpenStreetMap (no API key)
@@ -564,6 +633,11 @@ async function refresh() {
 
   const { fleet, schedules, loop, idle_carts, city } = data;
 
+  // ── City name in header ────────────────────────────────────────────
+  if (city?.name) {
+    document.getElementById('current-city').textContent = city.name;
+  }
+
   // ── Event source badge ─────────────────────────────────────────────
   const sourceBadge = document.getElementById('events-source-badge');
   if (city?.events_source === 'ticketmaster') {
@@ -607,10 +681,13 @@ async function refresh() {
         const evts    = c.events_found || 0;
         if (c.errors && c.errors.length > 0) {
           log(`⚠ Cycle #${c.cycle}: ${c.errors[0].slice(0, 60)}…`, 'red');
+          toast(`⚠ Cycle error: ${c.errors[0].slice(0, 80)}`, 'red', 6000);
         } else if (created > 0) {
           log(`✦ Cycle #${c.cycle} — ${created} carts deployed to ${evts} events`, 'purple');
+          toast(`🛺 ${created} carts deployed across ${evts} events`, 'green', 4000);
         } else if (expired > 0) {
           log(`↺ Cycle #${c.cycle} — ${expired} schedules expired, carts freed`, 'orange');
+          toast(`↺ ${expired} carts returned to idle — awaiting new assignments`, 'blue', 3000);
         } else {
           log(`· Cycle #${c.cycle} — ${evts} events found, all carts busy`, 'blue');
         }
@@ -755,6 +832,39 @@ function flyTo(lat, lng) {
   map.flyTo([lat, lng], 15, { animate: true, duration: 0.8 });
 }
 
+// ── Toast helper ──────────────────────────────────────────────────────
+function toast(msg, color = '', ms = 4000) {
+  const el = document.createElement('div');
+  el.className = `toast ${color}`;
+  el.textContent = msg;
+  document.getElementById('toast-container').appendChild(el);
+  setTimeout(() => el.remove(), ms);
+}
+
+// ── Loading overlay ───────────────────────────────────────────────────
+function showLoading(msg = 'Relocating fleet…') {
+  document.getElementById('loading-msg').textContent = msg;
+  document.getElementById('loading-overlay').classList.add('active');
+}
+function hideLoading() {
+  document.getElementById('loading-overlay').classList.remove('active');
+}
+
+// ── Clear all map markers ─────────────────────────────────────────────
+function clearAllMarkers() {
+  for (const cid of Object.keys(cartMarkers)) {
+    cartMarkers[cid].marker.remove();
+    if (cartMarkers[cid].line) cartMarkers[cid].line.remove();
+    delete cartMarkers[cid];
+  }
+  for (const eid of Object.keys(eventMarkers)) {
+    eventMarkers[eid].remove();
+    delete eventMarkers[eid];
+  }
+  prevScheduleIds = new Set();
+  prevIdleIds     = new Set();
+}
+
 // ── City search (Nominatim geocoding — no API key needed) ─────────────
 async function handleCitySearch() {
   const input  = document.getElementById('city-input');
@@ -765,9 +875,11 @@ async function handleCitySearch() {
 
   btn.disabled = true;
   status.className = '';
-  status.textContent = 'Geocoding…';
+  status.textContent = '🔍 Looking up city…';
+  showLoading('Geocoding city…');
 
   try {
+    // Step 1 — Geocode
     const geoRes = await fetch(
       `https://nominatim.openstreetmap.org/search?q=${encodeURIComponent(query)}&format=json&limit=1`,
       { headers: { 'User-Agent': 'RunTheKart/1.0 hackathon' } }
@@ -776,7 +888,9 @@ async function handleCitySearch() {
 
     if (!geoData.length) {
       status.className = 'err';
-      status.textContent = `City not found: "${query}"`;
+      status.textContent = `❌ City not found: "${query}"`;
+      toast(`City not found: "${query}"`, 'red');
+      hideLoading();
       btn.disabled = false;
       return;
     }
@@ -784,8 +898,13 @@ async function handleCitySearch() {
     const { lat, lon, display_name } = geoData[0];
     const cityName = display_name.split(',').slice(0, 2).join(',').trim();
 
-    status.textContent = `Updating fleet to ${cityName}…`;
+    // Step 2 — Clear old markers + fly map
+    document.getElementById('loading-msg').textContent = `Moving fleet to ${cityName}…`;
+    clearAllMarkers();
+    map.flyTo([parseFloat(lat), parseFloat(lon)], 13, { animate: true, duration: 1.0 });
 
+    // Step 3 — Update backend
+    status.textContent = `⏳ Relocating fleet to ${cityName}…`;
     const apiRes = await fetch('/api/v1/city', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
@@ -793,19 +912,20 @@ async function handleCitySearch() {
     });
 
     if (!apiRes.ok) throw new Error(await apiRes.text());
+    const apiData = await apiRes.json();
 
     status.className = 'ok';
-    status.textContent = `✓ Fleet moved to ${cityName}`;
-    log(`🌍 City changed → ${cityName}`, 'purple');
-
-    // Fly map to new city
-    map.flyTo([parseFloat(lat), parseFloat(lon)], 13, { animate: true, duration: 1.2 });
+    status.textContent = `✓ ${cityName} — ${apiData.carts_repositioned} carts repositioned`;
+    toast(`🌍 Fleet deployed to ${cityName} — fetching live events…`, 'blue', 5000);
+    log(`🌍 City → ${cityName} · ${apiData.carts_repositioned} carts repositioned`, 'purple');
 
   } catch (e) {
     status.className = 'err';
-    status.textContent = `Error: ${e.message}`;
+    status.textContent = `❌ ${e.message}`;
+    toast(`Error: ${e.message}`, 'red');
     log(`City change failed: ${e.message}`, 'red');
   } finally {
+    hideLoading();
     btn.disabled = false;
   }
 }
