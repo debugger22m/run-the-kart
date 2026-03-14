@@ -382,7 +382,7 @@
       <div class="subtitle">Autonomous Fleet Command</div>
       <form id="city-form" onsubmit="return false;">
         <input id="city-input" type="text" placeholder="Enter city (e.g. Austin, TX)" autocomplete="off" />
-        <button id="city-btn" type="submit" onclick="handleCitySearch()">Go</button>
+        <button id="city-btn" type="submit">Go</button>
       </form>
       <div id="city-status"></div>
       <div id="events-source-badge" class="mock">⚡ mock events</div>
@@ -565,13 +565,13 @@ async function refresh() {
   const { fleet, schedules, loop, idle_carts, city } = data;
 
   // ── Event source badge ─────────────────────────────────────────────
-  const badge = document.getElementById('events-source-badge');
+  const sourceBadge = document.getElementById('events-source-badge');
   if (city?.events_source === 'ticketmaster') {
-    badge.className = '';
-    badge.textContent = '🎫 Ticketmaster live';
+    sourceBadge.className = '';
+    sourceBadge.textContent = '🎫 Ticketmaster live';
   } else {
-    badge.className = 'mock';
-    badge.textContent = '⚡ mock events';
+    sourceBadge.className = 'mock';
+    sourceBadge.textContent = '⚡ mock events';
   }
 
   // ── Sidebar stats ──────────────────────────────────────────────────
@@ -810,7 +810,7 @@ async function handleCitySearch() {
   }
 }
 
-// Allow Enter key in the city input
+document.getElementById('city-btn').addEventListener('click', handleCitySearch);
 document.getElementById('city-input').addEventListener('keydown', e => {
   if (e.key === 'Enter') handleCitySearch();
 });

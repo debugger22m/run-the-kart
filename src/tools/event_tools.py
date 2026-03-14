@@ -433,7 +433,7 @@ _TM_ATTENDANCE = {
 async def _fetch_ticketmaster_events(
     latitude: float,
     longitude: float,
-    radius_km: float = 25.0,
+    radius_km: float = 50.0,
 ) -> list[dict] | None:
     """
     Fetch real events from Ticketmaster Discovery API.
@@ -527,14 +527,16 @@ async def _get_events_for_today_async(
     radius_km: float = 10.0,
     min_attendance: int = 200,
 ) -> dict:
-    # Try live API first
-    live_events = await _fetch_ticketmaster_events(latitude, longitude, radius_km)
-    source = "ticketmaster" if live_events is not None else "mock"
-
-    if live_events is not None:
-        events = live_events
+    if TICKETMASTER_API_KEY:
+        # Live mode — use Ticketmaster for the given coordinates.
+        # Do NOT fall back to SLC mock events if the city changed.
+        live_events = await _fetch_ticketmaster_events(latitude, longitude, radius_km)
+        events = live_events or []
+        source = "ticketmaster"
     else:
+        # No key — use rotating SLC mock events for demo
         events = _build_mock_events()
+        source = "mock"
 
     scored = [_score_event(e) for e in events if e["expected_attendance"] >= min_attendance]
     scored.sort(key=lambda e: e["opportunity_score"], reverse=True)
