@@ -1,86 +1,17 @@
 """
 Event discovery tools for the EventAgent.
 
-Each tool is defined as an Anthropic-compatible tool schema plus a handler function.
 Replace the mock implementations with real API calls (Eventbrite, Ticketmaster, etc.)
 """
 
 import json
 import random
 from datetime import datetime, timedelta
-from typing import Any
+
+from claude_agent_sdk import tool, create_sdk_mcp_server
 
 # ---------------------------------------------------------------------------
-# Anthropic tool schemas
-# ---------------------------------------------------------------------------
-
-EVENT_TOOLS = [
-    {
-        "name": "search_local_events",
-        "description": (
-            "Search for upcoming local events near a given location. "
-            "Returns a list of events with name, location, expected attendance, and time."
-        ),
-        "input_schema": {
-            "type": "object",
-            "properties": {
-                "latitude": {"type": "number", "description": "Latitude of the search centre"},
-                "longitude": {"type": "number", "description": "Longitude of the search centre"},
-                "radius_km": {
-                    "type": "number",
-                    "description": "Search radius in kilometres",
-                    "default": 10,
-                },
-                "date_from": {
-                    "type": "string",
-                    "description": "ISO date string for start of search window (e.g. 2026-03-14)",
-                },
-                "date_to": {
-                    "type": "string",
-                    "description": "ISO date string for end of search window (e.g. 2026-03-15)",
-                },
-                "categories": {
-                    "type": "array",
-                    "items": {"type": "string"},
-                    "description": "Optional list of event categories to filter by",
-                },
-            },
-            "required": ["latitude", "longitude", "date_from", "date_to"],
-        },
-    },
-    {
-        "name": "get_event_details",
-        "description": "Get detailed information about a specific event by its ID.",
-        "input_schema": {
-            "type": "object",
-            "properties": {
-                "event_id": {"type": "string", "description": "The unique event identifier"},
-            },
-            "required": ["event_id"],
-        },
-    },
-    {
-        "name": "estimate_foot_traffic",
-        "description": (
-            "Estimate the foot traffic and revenue potential at an event. "
-            "Returns an estimated number of customers and revenue range."
-        ),
-        "input_schema": {
-            "type": "object",
-            "properties": {
-                "event_id": {"type": "string", "description": "The event identifier"},
-                "expected_attendance": {
-                    "type": "integer",
-                    "description": "Expected number of attendees at the event",
-                },
-            },
-            "required": ["event_id", "expected_attendance"],
-        },
-    },
-]
-
-# ---------------------------------------------------------------------------
-# Mock handlers — replace with real API integrations
+# Mock data — replace with real API integrations
 # ---------------------------------------------------------------------------
 
 _MOCK_EVENTS = [
@@ -130,59 +61,70 @@ _MOCK_EVENTS = [
     },
 ]
 
+# ---------------------------------------------------------------------------
+# Tool definitions
+# ---------------------------------------------------------------------------
 
-def _search_local_events(
-    latitude: float,
-    longitude: float,
-    date_from: str,
-    date_to: str,
-    radius_km: float = 10.0,
-    categories: list[str] | None = None,
-) -> dict:
-    """Mock implementation — replace with Eventbrite / Ticketmaster API call."""
-    events = _MOCK_EVENTS
-    if categories:
-        events = [e for e in events if e.get("category") in categories]
-    return {"events": events, "total": len(events)}
+_SEARCH_SCHEMA = {
+    "type": "object",
+    "properties": {
+        "latitude": {"type": "number", "description": "Latitude of the search centre"},
+        "longitude": {"type": "number", "description": "Longitude of the search centre"},
+        "date_from": {"type": "string", "description": "ISO date string for start of window"},
+        "date_to": {"type": "string", "description": "ISO date string for end of window"},
+        "radius_km": {"type": "number", "description": "Search radius in kilometres", "default": 10},
+    },
+    "required": ["latitude", "longitude", "date_from", "date_to"],
+}
 
 
-def _get_event_details(event_id: str) -> dict:
-    """Mock implementation — replace with real event detail lookup."""
-    event = next((e for e in _MOCK_EVENTS if e["id"] == event_id), None)
+@tool(
+    "search_local_events",
+    "Search for upcoming local events near a given location. Returns events with name, location, attendance, and time.",
+    _SEARCH_SCHEMA,
+)
+async def search_local_events(args: dict) -> dict:
+    # Mock implementation — replace with Eventbrite / Ticketmaster API call
+    result = {"events": _MOCK_EVENTS, "total": len(_MOCK_EVENTS)}
+    return {"content": [{"type": "text", "text": json.dumps(result, default=str)}]}
+
+
+@tool(
+    "get_event_details",
+    "Get detailed information about a specific event by its ID.",
+    {"event_id": str},
+)
+async def get_event_details(args: dict) -> dict:
+    event = next((e for e in _MOCK_EVENTS if e["id"] == args["event_id"]), None)
     if not event:
-        return {"error": f"Event {event_id} not found"}
-    return event
+        result = {"error": f"Event {args['event_id']} not found"}
+    else:
+        result = event
+    return {"content": [{"type": "text", "text": json.dumps(result, default=str)}]}
 
 
-def _estimate_foot_traffic(event_id: str, expected_attendance: int) -> dict:
-    """Mock implementation — replace with ML model or historical data lookup."""
+@tool(
+    "estimate_foot_traffic",
+    "Estimate foot traffic and revenue potential at an event. Returns estimated customer count and revenue range.",
+    {"event_id": str, "expected_attendance": int},
+)
+async def estimate_foot_traffic(args: dict) -> dict:
+    # Mock implementation — replace with ML model or historical data lookup
     conversion_rate = random.uniform(0.05, 0.15)
     avg_order_value = random.uniform(8.0, 18.0)
-    estimated_customers = int(expected_attendance * conversion_rate)
-    estimated_revenue_low = estimated_customers * avg_order_value * 0.8
-    estimated_revenue_high = estimated_customers * avg_order_value * 1.2
-
-    return {
-        "event_id": event_id,
+    estimated_customers = int(args["expected_attendance"] * conversion_rate)
+    result = {
+        "event_id": args["event_id"],
         "estimated_customers": estimated_customers,
-        "estimated_revenue_low": round(estimated_revenue_low, 2),
-        "estimated_revenue_high": round(estimated_revenue_high, 2),
+        "estimated_revenue_low": round(estimated_customers * avg_order_value * 0.8, 2),
+        "estimated_revenue_high": round(estimated_customers * avg_order_value * 1.2, 2),
         "confidence": "medium",
     }
+    return {"content": [{"type": "text", "text": json.dumps(result)}]}
 
 
-def handle_event_tool_call(tool_name: str, tool_input: dict[str, Any]) -> str:
-    """Route a Claude tool_use call to the correct handler and return a JSON string."""
-    handlers = {
-        "search_local_events": lambda i: _search_local_events(**i),
-        "get_event_details": lambda i: _get_event_details(**i),
-        "estimate_foot_traffic": lambda i: _estimate_foot_traffic(**i),
-    }
-    handler = handlers.get(tool_name)
-    if not handler:
-        return json.dumps({"error": f"Unknown tool: {tool_name}"})
-    try:
-        result = handler(tool_input)
-        return json.dumps(result, default=str)
-    except Exception as exc:
-        return json.dumps({"error": str(exc)})
+# Bundle into an MCP server for use with the Agent SDK
+EVENT_MCP_SERVER = create_sdk_mcp_server(
+    name="event-tools",
+    tools=[search_local_events, get_event_details, estimate_foot_traffic],
+)

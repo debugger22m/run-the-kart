@@ -7,13 +7,13 @@ cart to each high-value event, producing a list of Schedule objects.
 
 import json
 import logging
-from datetime import datetime, timedelta
-from typing import Any
+from datetime import datetime
 
-from .base import BaseAgent
-from ..models import Cart, Fleet, Schedule, Coordinates
+from claude_agent_sdk import query, ClaudeAgentOptions
+
+from ..tools.maps_tools import MAPS_MCP_SERVER
+from ..models import Fleet, Schedule, Coordinates
 from ..models.schedule import Event, ScheduleStatus
-from ..tools.maps_tools import MAPS_TOOLS, handle_maps_tool_call
 
 logger = logging.getLogger(__name__)
 
@@ -38,21 +38,9 @@ Prioritise events by estimated revenue (highest first). If no carts are availabl
 """
 
 
-class SchedulerAgent(BaseAgent):
-    def __init__(self) -> None:
-        super().__init__(
-            name="SchedulerAgent",
-            system_prompt=SYSTEM_PROMPT,
-            tools=MAPS_TOOLS,
-        )
-
-    async def handle_tool_call(self, tool_name: str, tool_input: dict[str, Any]) -> str:
-        return handle_maps_tool_call(tool_name, tool_input)
-
+class SchedulerAgent:
     async def create_schedules(self, fleet: Fleet, events: list[dict]) -> list[Schedule]:
-        """
-        High-level method: given a fleet and a list of events, produce Schedule objects.
-        """
+        """Given a fleet and a list of events, produce Schedule objects via the Agent SDK."""
         available_carts = fleet.get_available_carts()
         if not available_carts:
             logger.warning("SchedulerAgent: No available carts in fleet.")
@@ -68,7 +56,7 @@ class SchedulerAgent(BaseAgent):
             for c in available_carts
         ]
 
-        task = (
+        prompt = (
             f"Assign food trucks to events to maximise revenue.\n\n"
             f"Available carts:\n{json.dumps(cart_summaries, indent=2)}\n\n"
             f"Events to cover:\n{json.dumps(events, indent=2)}\n\n"
@@ -76,16 +64,28 @@ class SchedulerAgent(BaseAgent):
             f"Return a JSON array of schedule assignments."
         )
 
-        raw_response = await self.run(task)
+        result_text = ""
+        async for message in query(
+            prompt=prompt,
+            options=ClaudeAgentOptions(
+                system_prompt=SYSTEM_PROMPT,
+                model="claude-opus-4-6",
+                permission_mode="bypassPermissions",
+                mcp_servers={"maps-tools": MAPS_MCP_SERVER},
+                max_turns=15,
+            ),
+        ):
+            if message.type == "result":
+                result_text = message.result
 
         assignments: list[dict] = []
         try:
-            start = raw_response.find("[")
-            end = raw_response.rfind("]") + 1
+            start = result_text.find("[")
+            end = result_text.rfind("]") + 1
             if start != -1 and end > start:
-                assignments = json.loads(raw_response[start:end])
+                assignments = json.loads(result_text[start:end])
         except (json.JSONDecodeError, ValueError) as exc:
-            logger.error("SchedulerAgent response parse error: %s\nRaw: %s", exc, raw_response)
+            logger.error("SchedulerAgent response parse error: %s\nRaw: %s", exc, result_text)
             return []
 
         schedules = []
