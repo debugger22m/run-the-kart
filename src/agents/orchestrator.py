@@ -148,8 +148,8 @@ class OrchestratorAgent:
         """Return the average lat/lng of all carts that have a known location."""
         located = [c for c in self.fleet.carts.values() if c.current_location]
         if not located:
-            # Default to San Francisco if no cart locations are known
-            return 37.7749, -122.4194
+            # Default to downtown Salt Lake City if no cart locations are known
+            return 40.7608, -111.8910
         lat = sum(c.current_location.lat for c in located) / len(located)
         lng = sum(c.current_location.lng for c in located) / len(located)
         return lat, lng

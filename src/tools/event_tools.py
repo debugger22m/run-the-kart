@@ -6,6 +6,7 @@ Replace the mock implementations with real API calls (Eventbrite, Ticketmaster, 
 """
 
 import json
+import math
 import random
 from datetime import datetime, timedelta
 from typing import Any
@@ -97,68 +98,104 @@ EVENT_TOOLS = [
 # ---------------------------------------------------------------------------
 
 def _build_mock_events() -> list[dict]:
-    """Generate mock events anchored to the current time."""
+    """Generate mock events anchored to current time, located in downtown Salt Lake City."""
     now = datetime.utcnow()
     return [
         {
             "id": "evt_001",
-            "name": "Downtown Farmers Market",
-            "location_name": "Central Plaza",
-            "latitude": 37.7749,
-            "longitude": -122.4194,
-            "expected_attendance": 1200,
+            "name": "SLC Downtown Farmers Market",
+            "location_name": "Pioneer Park",
+            "latitude": 40.7580,
+            "longitude": -111.9012,
+            "expected_attendance": 3500,
             "start_time": (now + timedelta(hours=1)).isoformat(),
             "end_time": (now + timedelta(hours=5)).isoformat(),
             "category": "market",
-            "description": "Weekly outdoor farmers market with 80+ vendors.",
+            "description": "Utah's largest weekly outdoor farmers market with 100+ vendors.",
         },
         {
             "id": "evt_002",
-            "name": "Tech Conference 2026",
-            "location_name": "Convention Centre",
-            "latitude": 37.7845,
-            "longitude": -122.4080,
-            "expected_attendance": 3500,
+            "name": "Utah Tech Summit 2026",
+            "location_name": "Salt Palace Convention Center",
+            "latitude": 40.7608,
+            "longitude": -111.8973,
+            "expected_attendance": 5000,
             "start_time": (now + timedelta(minutes=30)).isoformat(),
-            "end_time": (now + timedelta(hours=8)).isoformat(),
+            "end_time": (now + timedelta(hours=9)).isoformat(),
             "category": "conference",
-            "description": "Annual technology summit with 3500 attendees.",
+            "description": "Annual statewide technology summit at the Salt Palace.",
         },
         {
             "id": "evt_003",
-            "name": "Golden Gate Park Concert",
-            "location_name": "Golden Gate Park Bandshell",
-            "latitude": 37.7694,
-            "longitude": -122.4862,
-            "expected_attendance": 5000,
+            "name": "Jazz in the Park",
+            "location_name": "Gallivan Center",
+            "latitude": 40.7611,
+            "longitude": -111.8906,
+            "expected_attendance": 4000,
             "start_time": (now + timedelta(hours=3)).isoformat(),
             "end_time": (now + timedelta(hours=7)).isoformat(),
             "category": "music",
-            "description": "Free outdoor concert series in the park.",
+            "description": "Free outdoor jazz concert at Gallivan Plaza.",
         },
         {
             "id": "evt_004",
-            "name": "Mission Street Food Festival",
-            "location_name": "Mission District",
-            "latitude": 37.7599,
-            "longitude": -122.4148,
-            "expected_attendance": 800,
+            "name": "Utah Jazz Home Game",
+            "location_name": "Delta Center",
+            "latitude": 40.7683,
+            "longitude": -111.9012,
+            "expected_attendance": 18500,
             "start_time": (now + timedelta(hours=2)).isoformat(),
-            "end_time": (now + timedelta(hours=6)).isoformat(),
-            "category": "food",
-            "description": "Neighbourhood street food festival.",
+            "end_time": (now + timedelta(hours=5)).isoformat(),
+            "category": "sports",
+            "description": "Utah Jazz vs Lakers — sold-out game at Delta Center.",
         },
         {
             "id": "evt_005",
-            "name": "SoMa Night Market",
-            "location_name": "SoMa District",
-            "latitude": 37.7786,
-            "longitude": -122.4058,
-            "expected_attendance": 2200,
+            "name": "Gateway Night Market",
+            "location_name": "The Gateway Mall",
+            "latitude": 40.7694,
+            "longitude": -111.9018,
+            "expected_attendance": 2500,
             "start_time": (now + timedelta(hours=4)).isoformat(),
             "end_time": (now + timedelta(hours=9)).isoformat(),
             "category": "market",
-            "description": "Evening market with art, food, and live music.",
+            "description": "Evening market with local vendors, food, and live entertainment.",
+        },
+        {
+            "id": "evt_006",
+            "name": "Temple Square Cultural Fest",
+            "location_name": "Temple Square",
+            "latitude": 40.7708,
+            "longitude": -111.8958,
+            "expected_attendance": 6000,
+            "start_time": (now + timedelta(hours=2)).isoformat(),
+            "end_time": (now + timedelta(hours=8)).isoformat(),
+            "category": "festival",
+            "description": "Annual cultural festival at Temple Square with performances and exhibits.",
+        },
+        {
+            "id": "evt_007",
+            "name": "Sugar House Block Party",
+            "location_name": "Sugar House Park",
+            "latitude": 40.7239,
+            "longitude": -111.8583,
+            "expected_attendance": 1800,
+            "start_time": (now + timedelta(hours=1)).isoformat(),
+            "end_time": (now + timedelta(hours=6)).isoformat(),
+            "category": "festival",
+            "description": "Community block party in Sugar House neighborhood.",
+        },
+        {
+            "id": "evt_008",
+            "name": "University of Utah Graduation",
+            "location_name": "Rice-Eccles Stadium",
+            "latitude": 40.7596,
+            "longitude": -111.8486,
+            "expected_attendance": 12000,
+            "start_time": (now + timedelta(hours=1)).isoformat(),
+            "end_time": (now + timedelta(hours=4)).isoformat(),
+            "category": "conference",
+            "description": "Spring commencement ceremony at Rice-Eccles Stadium.",
         },
     ]
 
@@ -167,22 +204,68 @@ def _build_mock_events() -> list[dict]:
 # Handlers
 # ---------------------------------------------------------------------------
 
+_CATEGORY_PROFILE = {
+    "music":      {"conversion": 0.12, "avg_order": 14.0},
+    "conference": {"conversion": 0.09, "avg_order": 16.0},
+    "market":     {"conversion": 0.14, "avg_order": 11.0},
+    "food":       {"conversion": 0.08, "avg_order": 13.0},
+    "festival":   {"conversion": 0.15, "avg_order": 12.0},
+    "sports":     {"conversion": 0.10, "avg_order": 10.0},
+}
+_DEFAULT_PROFILE = {"conversion": 0.08, "avg_order": 11.0}
+
+
+def _score_event(event: dict) -> dict:
+    """Compute demand forecast and opportunity score inline — avoids extra LLM tool calls."""
+    profile = _CATEGORY_PROFILE.get(event.get("category", ""), _DEFAULT_PROFILE)
+    attendance = event["expected_attendance"]
+    start = datetime.fromisoformat(event["start_time"])
+    end = datetime.fromisoformat(event["end_time"])
+    duration_hours = max((end - start).total_seconds() / 3600, 1)
+
+    estimated_customers = int(attendance * profile["conversion"])
+    avg_order = profile["avg_order"]
+    estimated_revenue = round(estimated_customers * avg_order, 2)
+
+    # Demand score: customers per hour, capped at 100
+    demand_score = min(100, round((estimated_customers / duration_hours) * 2, 1))
+
+    # Time-of-day bonus (UTC hours)
+    h = start.hour
+    time_bonus = 15 if (11 <= h <= 14 or 17 <= h <= 21) else (5 if 9 <= h <= 16 else -10)
+    duration_bonus = min(10, (duration_hours - 2) * 2) if duration_hours > 2 else 0
+    revenue_bonus = min(10, math.log10(max(estimated_revenue, 1)) * 2)
+    opportunity_score = round(min(100, max(0, demand_score + time_bonus + duration_bonus + revenue_bonus)), 1)
+
+    return {
+        **event,
+        "estimated_customers": estimated_customers,
+        "estimated_revenue_high": estimated_revenue,
+        "demand_score": demand_score,
+        "opportunity_score": opportunity_score,
+    }
+
+
 def _get_events_for_today(
     latitude: float,
     longitude: float,
     radius_km: float = 10.0,
     min_attendance: int = 200,
 ) -> dict:
-    """Return today's events above the minimum attendance threshold."""
+    """
+    Return today's SLC events pre-scored by demand and opportunity.
+    Scores are pre-computed so the EventAgent can return results in a single tool call.
+    """
     events = _build_mock_events()
-    filtered = [e for e in events if e["expected_attendance"] >= min_attendance]
-    filtered.sort(key=lambda e: e["start_time"])
+    scored = [_score_event(e) for e in events if e["expected_attendance"] >= min_attendance]
+    scored.sort(key=lambda e: e["opportunity_score"], reverse=True)
     return {
         "date": datetime.utcnow().strftime("%Y-%m-%d"),
+        "location": "Salt Lake City, UT",
         "centre": {"latitude": latitude, "longitude": longitude},
         "radius_km": radius_km,
-        "events": filtered,
-        "total": len(filtered),
+        "events": scored,
+        "total": len(scored),
     }
 
 

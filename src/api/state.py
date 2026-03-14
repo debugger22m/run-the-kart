@@ -9,27 +9,27 @@ from ..models.cart import CartStatus
 from ..agents import OrchestratorAgent
 from .loop import AutonomousLoop
 
+# Downtown Salt Lake City staging locations
+_DEMO_CARTS = [
+    ("Kart-Pioneer",   40.7580, -111.9012),  # Pioneer Park
+    ("Kart-Gallivan",  40.7611, -111.8906),  # Gallivan Center
+    ("Kart-Gateway",   40.7694, -111.9018),  # The Gateway
+    ("Kart-Temple",    40.7708, -111.8958),  # Temple Square
+    ("Kart-Delta",     40.7683, -111.9012),  # Delta Center area
+]
+
 
 class AppState:
     def __init__(self) -> None:
-        fleet_name = os.getenv("DEFAULT_FLEET_NAME", "KartFleet")
+        fleet_name = os.getenv("DEFAULT_FLEET_NAME", "SLC-KartFleet")
         self.fleet = Fleet(name=fleet_name)
 
-        # Seed the fleet with a couple of demo carts so the API is usable out-of-the-box.
-        demo_carts = [
-            Cart(
-                name="Kart-Alpha",
+        for name, lat, lng in _DEMO_CARTS:
+            self.fleet.add_cart(Cart(
+                name=name,
                 status=CartStatus.IDLE,
-                current_location=Coordinates(lat=37.7749, lng=-122.4194),
-            ),
-            Cart(
-                name="Kart-Beta",
-                status=CartStatus.IDLE,
-                current_location=Coordinates(lat=37.7845, lng=-122.4080),
-            ),
-        ]
-        for cart in demo_carts:
-            self.fleet.add_cart(cart)
+                current_location=Coordinates(lat=lat, lng=lng),
+            ))
 
         self.orchestrator = OrchestratorAgent(self.fleet)
         self.loop = AutonomousLoop(self.orchestrator)
