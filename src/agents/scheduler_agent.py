@@ -1,19 +1,24 @@
 """
 Scheduler Agent
 
-Takes a list of events and the current fleet state, then assigns the best available
-cart to each high-value event, producing a list of Schedule objects.
+Takes demand-scored events from the EventAgent and the current fleet state,
+then assigns carts to maximise total fleet revenue — preventing conflicts
+and ensuring balanced geographic coverage.
+
+Skills loaded:
+  - FleetOptimizationSkill: conflict checking, opportunity cost, coverage balance
 """
 
 import json
 import logging
-from datetime import datetime, timedelta
+from datetime import datetime
 from typing import Any
 
 from .base import BaseAgent
-from ..models import Cart, Fleet, Schedule, Coordinates
+from ..models import Fleet, Schedule, Coordinates
 from ..models.schedule import Event, ScheduleStatus
 from ..tools.maps_tools import MAPS_TOOLS, handle_maps_tool_call
+from ..skills import FleetOptimizationSkill
 
 logger = logging.getLogger(__name__)
 
@@ -21,20 +26,26 @@ SYSTEM_PROMPT = """\
 You are the Scheduler Agent for an autonomous food truck fleet management system.
 
 You will receive:
-- A list of upcoming events (with coordinates, attendance, revenue estimates).
-- A list of available food trucks (carts) with their current coordinates.
+- A list of scored events (each has an opportunity_score from the EventAgent).
+- A list of available food trucks (carts) with their current GPS coordinates.
 
-Your job is to:
-1. Use the routing tools to find the nearest available cart for each event.
-2. Check parking availability at each event location.
-3. Assign carts to events, maximising total estimated revenue.
-4. Avoid assigning the same cart to overlapping time windows.
+Your goal is to maximise TOTAL fleet revenue — not just one event's revenue.
 
-Return your final answer as a valid JSON array of schedule assignment objects. Each must include:
+Step-by-step process:
+1. Sort events by opportunity_score descending — always fill highest-value events first.
+2. For each event, call find_nearest_available_cart to find the best cart.
+3. Call check_assignment_conflicts to ensure the cart has no time overlap.
+4. If two events compete for the same cart, call calculate_opportunity_cost to pick the winner.
+5. After all assignments are drafted, call check_coverage_balance to verify the fleet is spread.
+6. If balance_score < 50, revisit the lowest-value clustering assignment and move it.
+7. Return final confirmed assignments as a JSON array.
+
+Each assignment object must include:
   - cart_id, event_id, event_name, destination_lat, destination_lng,
-    arrival_time (ISO), departure_time (ISO), estimated_revenue
+    arrival_time (ISO), departure_time (ISO), estimated_revenue, opportunity_score
 
-Prioritise events by estimated revenue (highest first). If no carts are available, say so.
+Never assign the same cart to two overlapping time windows.
+Never assign more than one cart to an event unless expected_attendance > 3000.
 """
 
 
@@ -45,13 +56,15 @@ class SchedulerAgent(BaseAgent):
             system_prompt=SYSTEM_PROMPT,
             tools=MAPS_TOOLS,
         )
+        self.load_skill(FleetOptimizationSkill())
 
-    async def handle_tool_call(self, tool_name: str, tool_input: dict[str, Any]) -> str:
+    async def handle_own_tool_call(self, tool_name: str, tool_input: dict[str, Any]) -> str:
         return handle_maps_tool_call(tool_name, tool_input)
 
     async def create_schedules(self, fleet: Fleet, events: list[dict]) -> list[Schedule]:
         """
-        High-level method: given a fleet and a list of events, produce Schedule objects.
+        Assign carts to events, maximising total revenue with conflict prevention
+        and geographic balance checks.
         """
         available_carts = fleet.get_available_carts()
         if not available_carts:
@@ -69,11 +82,11 @@ class SchedulerAgent(BaseAgent):
         ]
 
         task = (
-            f"Assign food trucks to events to maximise revenue.\n\n"
+            f"Maximise total fleet revenue by assigning food trucks to the best events.\n\n"
             f"Available carts:\n{json.dumps(cart_summaries, indent=2)}\n\n"
-            f"Events to cover:\n{json.dumps(events, indent=2)}\n\n"
-            f"Use tools to calculate routes, find nearest carts, and check parking. "
-            f"Return a JSON array of schedule assignments."
+            f"Events (pre-scored, highest opportunity first):\n{json.dumps(events, indent=2)}\n\n"
+            f"Use routing, conflict checking, and coverage balance tools. "
+            f"Return confirmed assignments as a JSON array."
         )
 
         raw_response = await self.run(task)
@@ -100,7 +113,6 @@ class SchedulerAgent(BaseAgent):
         return schedules
 
     def _build_schedule(self, assignment: dict, events: list[dict]) -> Schedule | None:
-        """Convert a raw LLM assignment dict into a typed Schedule object."""
         event_id = assignment.get("event_id")
         event_data = next((e for e in events if e.get("id") == event_id), None)
 
@@ -122,14 +134,11 @@ class SchedulerAgent(BaseAgent):
             category=event_data.get("category"),
         )
 
-        arrival_str = assignment.get("arrival_time", event_data["start_time"])
-        departure_str = assignment.get("departure_time", event_data["end_time"])
-
         return Schedule(
             cart_id=assignment["cart_id"],
             event=event,
-            arrival_time=datetime.fromisoformat(arrival_str),
-            departure_time=datetime.fromisoformat(departure_str),
+            arrival_time=datetime.fromisoformat(assignment.get("arrival_time", event_data["start_time"])),
+            departure_time=datetime.fromisoformat(assignment.get("departure_time", event_data["end_time"])),
             status=ScheduleStatus.CONFIRMED,
             estimated_revenue=assignment.get("estimated_revenue"),
         )
