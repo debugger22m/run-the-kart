@@ -1,9 +1,14 @@
 """
 Orchestrator Agent
 
-The top-level agent that coordinates the EventAgent and SchedulerAgent.
-It decides when to trigger event discovery, when to schedule, and maintains
-overall fleet state.
+Fully autonomous coordinator. Each cycle:
+  1. Auto-expires schedules whose events have ended → carts return to idle.
+  2. Derives search centre from fleet positions.
+  3. Runs EventAgent to discover and score today's SLC events.
+  4. Runs SchedulerAgent to assign idle carts to the best events.
+  5. Applies assignments to fleet state.
+
+No human input is required between cycles.
 """
 
 import asyncio
@@ -23,6 +28,7 @@ class OrchestrationResult:
     fleet_summary: dict
     discovered_events: list[dict]
     schedules: list[Schedule]
+    expired_schedules: int = 0
     errors: list[str] = field(default_factory=list)
     timestamp: datetime = field(default_factory=datetime.utcnow)
 
@@ -32,14 +38,15 @@ class OrchestrationResult:
             "fleet_summary": self.fleet_summary,
             "discovered_events": self.discovered_events,
             "schedules": [s.model_dump_summary() for s in self.schedules],
+            "expired_schedules": self.expired_schedules,
             "errors": self.errors,
         }
 
 
 class OrchestratorAgent:
     """
-    Coordinates the EventAgent and SchedulerAgent to autonomously manage
-    the food truck fleet's deployment.
+    Autonomous coordinator for the food truck fleet.
+    Designed to run continuously via AutonomousLoop — no manual triggers needed.
     """
 
     def __init__(self, fleet: Fleet) -> None:
@@ -60,68 +67,66 @@ class OrchestratorAgent:
         hours_ahead: int = 12,
     ) -> OrchestrationResult:
         """
-        Execute one full orchestration cycle:
-          1. Derive search centre from fleet positions (or use provided lat/lng).
-          2. Discover today's events in the area.
-          3. Schedule available carts to the best events.
-          4. Update fleet state.
+        One full autonomous cycle — safe to call repeatedly with no side effects.
         """
         errors: list[str] = []
 
-        # Derive search centre from the fleet's cart positions if not explicitly provided
+        # Step 1: Free carts whose events have ended
+        expired = self._expire_completed_schedules()
+        if expired:
+            logger.info("Orchestrator: auto-expired %d schedule(s) — carts returned to idle.", expired)
+
+        # Step 2: Derive search centre from fleet positions
         if latitude is None or longitude is None:
             latitude, longitude = self._fleet_centroid()
-            logger.info("Orchestrator: search centre derived from fleet — (%.4f, %.4f)", latitude, longitude)
+            logger.info("Orchestrator: search centre from fleet centroid — (%.4f, %.4f)", latitude, longitude)
 
         logger.info(
-            "Orchestrator: starting cycle — centre=(%.4f, %.4f), radius=%dkm, window=%dh",
-            latitude,
-            longitude,
-            radius_km,
-            hours_ahead,
+            "Orchestrator: cycle start — centre=(%.4f, %.4f) radius=%dkm idle_carts=%d",
+            latitude, longitude, radius_km, len(self.fleet.get_available_carts()),
         )
 
         date_from = datetime.utcnow().strftime("%Y-%m-%d")
         date_to = (datetime.utcnow() + timedelta(hours=hours_ahead)).strftime("%Y-%m-%d")
 
-        # --- Step 1: Discover events (runs concurrently with fleet status check) ---
-        events_task = asyncio.create_task(
-            self._event_agent.find_events(latitude, longitude, date_from, date_to, radius_km)
-        )
-
+        # Step 3: Discover events
         try:
-            discovered_events = await events_task
-            logger.info("Orchestrator: discovered %d event(s).", len(discovered_events))
+            discovered_events = await self._event_agent.find_events(
+                latitude, longitude, date_from, date_to, radius_km
+            )
+            logger.info("Orchestrator: %d event(s) discovered.", len(discovered_events))
         except Exception as exc:
             logger.error("Orchestrator: EventAgent failed — %s", exc)
             errors.append(f"EventAgent error: {exc}")
             discovered_events = []
 
-        schedules: list[Schedule] = []
+        # Step 4: Assign idle carts to events
+        new_schedules: list[Schedule] = []
+        available = self.fleet.get_available_carts()
 
-        # --- Step 2: Schedule carts to events ---
-        if discovered_events and self.fleet.get_available_carts():
+        if not available:
+            logger.info("Orchestrator: all carts busy — skipping scheduling this cycle.")
+        elif not discovered_events:
+            logger.info("Orchestrator: no events found — skipping scheduling this cycle.")
+        else:
             try:
-                schedules = await self._scheduler_agent.create_schedules(
+                new_schedules = await self._scheduler_agent.create_schedules(
                     self.fleet, discovered_events
                 )
-                logger.info("Orchestrator: created %d schedule(s).", len(schedules))
+                logger.info("Orchestrator: %d new schedule(s) created.", len(new_schedules))
             except Exception as exc:
                 logger.error("Orchestrator: SchedulerAgent failed — %s", exc)
                 errors.append(f"SchedulerAgent error: {exc}")
-        elif not self.fleet.get_available_carts():
-            logger.info("Orchestrator: no available carts — skipping scheduling.")
-        else:
-            logger.info("Orchestrator: no events found — skipping scheduling.")
 
-        # --- Step 3: Apply schedules to fleet ---
-        for schedule in schedules:
+        # Step 5: Apply new schedules to fleet
+        for schedule in new_schedules:
             self._apply_schedule(schedule)
 
         return OrchestrationResult(
             fleet_summary=self.fleet.summary(),
             discovered_events=discovered_events,
-            schedules=schedules,
+            schedules=new_schedules,
+            expired_schedules=expired,
             errors=errors,
         )
 
@@ -129,7 +134,7 @@ class OrchestratorAgent:
         return list(self._active_schedules.values())
 
     def complete_schedule(self, schedule_id: str) -> bool:
-        """Mark a schedule as completed and return the cart to idle."""
+        """Manually mark a schedule as completed and return the cart to idle."""
         schedule = self._active_schedules.get(schedule_id)
         if not schedule:
             return False
@@ -138,24 +143,46 @@ class OrchestratorAgent:
         if cart:
             cart.go_idle()
         del self._active_schedules[schedule_id]
+        logger.info("Orchestrator: schedule %s manually completed.", schedule_id)
         return True
 
     # ------------------------------------------------------------------
     # Internal helpers
     # ------------------------------------------------------------------
 
+    def _expire_completed_schedules(self) -> int:
+        """
+        Scan active schedules and auto-complete any whose departure_time has passed.
+        Returns the number of schedules expired.
+        """
+        now = datetime.utcnow()
+        expired_ids = [
+            sid for sid, s in self._active_schedules.items()
+            if s.departure_time <= now
+        ]
+        for sid in expired_ids:
+            schedule = self._active_schedules.pop(sid)
+            schedule.complete()
+            cart = self.fleet.get_cart(schedule.cart_id)
+            if cart:
+                cart.go_idle()
+                logger.info(
+                    "Orchestrator: '%s' finished at '%s' — back to idle.",
+                    cart.name,
+                    schedule.event.name,
+                )
+        return len(expired_ids)
+
     def _fleet_centroid(self) -> tuple[float, float]:
-        """Return the average lat/lng of all carts that have a known location."""
+        """Average lat/lng of all carts with a known location."""
         located = [c for c in self.fleet.carts.values() if c.current_location]
         if not located:
-            # Default to downtown Salt Lake City if no cart locations are known
-            return 40.7608, -111.8910
+            return 40.7608, -111.8910  # Downtown SLC fallback
         lat = sum(c.current_location.lat for c in located) / len(located)
         lng = sum(c.current_location.lng for c in located) / len(located)
         return lat, lng
 
     def _apply_schedule(self, schedule: Schedule) -> None:
-        """Push a schedule onto a cart and register it as active."""
         cart = self.fleet.get_cart(schedule.cart_id)
         if not cart:
             logger.warning("Orchestrator: cart %s not found in fleet.", schedule.cart_id)
@@ -163,8 +190,8 @@ class OrchestratorAgent:
         cart.assign(schedule.id, schedule.event.coordinates)
         self._active_schedules[schedule.id] = schedule
         logger.info(
-            "Orchestrator: cart '%s' assigned to event '%s' at %s.",
+            "Orchestrator: '%s' → '%s' (departs %s).",
             cart.name,
             schedule.event.name,
-            schedule.event.coordinates,
+            schedule.departure_time.strftime("%H:%M UTC"),
         )

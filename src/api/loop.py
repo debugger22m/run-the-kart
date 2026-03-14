@@ -73,10 +73,11 @@ class AutonomousLoop:
         self.status.running = True
         self.status.last_error = None
         self._task = asyncio.create_task(self._loop(config))
-        logger.info(
-            "AutonomousLoop started — centre=(%.4f, %.4f), interval=%ds",
-            config.latitude, config.longitude, config.interval_seconds,
+        centre = (
+            f"({config.latitude:.4f}, {config.longitude:.4f})"
+            if config.latitude is not None else "auto (fleet centroid)"
         )
+        logger.info("AutonomousLoop started — centre=%s, interval=%ds", centre, config.interval_seconds)
 
     async def stop(self) -> None:
         if self._task and not self._task.done():
@@ -113,6 +114,7 @@ class AutonomousLoop:
                 "timestamp": self.status.last_run_at.isoformat(),
                 "events_found": len(result.discovered_events),
                 "schedules_created": len(result.schedules),
+                "expired_schedules": result.expired_schedules,
                 "errors": result.errors,
             }
             self.status.history.append(summary)

@@ -51,10 +51,14 @@ class AutonomousStartRequest(BaseModel):
 # Fleet routes
 # ---------------------------------------------------------------------------
 
-@router.get("/fleet", summary="Get fleet overview")
+@router.get("/fleet", summary="Get fleet overview including autonomous loop status")
 async def get_fleet(request: Request):
     state = get_state(request)
-    return state.fleet.summary()
+    return {
+        **state.fleet.summary(),
+        "autonomous_loop": state.loop.status.to_dict(),
+        "active_schedules": len(state.orchestrator.get_active_schedules()),
+    }
 
 
 @router.get("/fleet/carts", summary="List all carts")
@@ -152,7 +156,10 @@ async def start_autonomous(
     """
     state = get_state(request)
     if state.loop.is_running():
-        raise HTTPException(status_code=409, detail="Autonomous loop is already running. Stop it first.")
+        return {
+            "message": "Autonomous loop is already running",
+            "status": state.loop.status.to_dict(),
+        }
 
     config = LoopConfig(
         radius_km=radius_km,
