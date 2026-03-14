@@ -1,1 +1,1 @@
-web: python3 start.sh
+web: uvicorn src.api.app:create_app --factory --host 0.0.0.0 --port $PORT

@@ -4,7 +4,7 @@
     "builder": "NIXPACKS"
   },
   "deploy": {
-    "startCommand": "python3 start.sh",
+    "startCommand": "uvicorn src.api.app:create_app --factory --host 0.0.0.0 --port $PORT",
     "healthcheckPath": "/api/v1/fleet",
     "healthcheckTimeout": 60,
     "restartPolicyType": "ON_FAILURE",
