@@ -1,15 +1,23 @@
 """
 Event discovery tools for the EventAgent.
 
-Each tool is defined as an Anthropic-compatible tool schema plus a handler function.
-Replace the mock implementations with real API calls (Eventbrite, Ticketmaster, etc.)
+Primary source: Ticketmaster Discovery API (free, set TICKETMASTER_API_KEY in .env).
+Fallback:       rotating mock events in Salt Lake City (no key required).
 """
 
 import json
+import logging
 import math
+import os
 import random
 from datetime import datetime, timedelta
 from typing import Any
+
+import httpx
+
+logger = logging.getLogger(__name__)
+
+TICKETMASTER_API_KEY = os.getenv("TICKETMASTER_API_KEY", "")
 
 # ---------------------------------------------------------------------------
 # Anthropic tool schemas
@@ -398,17 +406,162 @@ def _estimate_foot_traffic(event_id: str, expected_attendance: int) -> dict:
     }
 
 
-def handle_event_tool_call(tool_name: str, tool_input: dict[str, Any]) -> str:
-    handlers = {
-        "get_events_for_today": lambda i: _get_events_for_today(**i),
-        "search_local_events": lambda i: _search_local_events(**i),
-        "get_event_details": lambda i: _get_event_details(**i),
-        "estimate_foot_traffic": lambda i: _estimate_foot_traffic(**i),
+# ---------------------------------------------------------------------------
+# Ticketmaster Discovery API (live events)
+# ---------------------------------------------------------------------------
+
+_TM_CATEGORY_MAP = {
+    "music":           "music",
+    "sports":          "sports",
+    "arts & theatre":  "festival",
+    "family":          "festival",
+    "film":            "festival",
+    "miscellaneous":   "conference",
+    "undefined":       "conference",
+}
+
+_TM_ATTENDANCE = {
+    "sports":     18000,
+    "music":       8000,
+    "festival":    5000,
+    "conference":  3000,
+    "market":      2500,
+    "food":        2000,
+}
+
+
+async def _fetch_ticketmaster_events(
+    latitude: float,
+    longitude: float,
+    radius_km: float = 25.0,
+) -> list[dict] | None:
+    """
+    Fetch real events from Ticketmaster Discovery API.
+    Returns None when the key is missing or the request fails (triggers mock fallback).
+    """
+    if not TICKETMASTER_API_KEY:
+        return None
+
+    radius_miles = max(1, int(radius_km * 0.621371))
+    now = datetime.utcnow()
+    params = {
+        "apikey":        TICKETMASTER_API_KEY,
+        "latlong":       f"{latitude},{longitude}",
+        "radius":        radius_miles,
+        "unit":          "miles",
+        "size":          20,
+        "sort":          "date,asc",
+        "startDateTime": now.strftime("%Y-%m-%dT%H:%M:%SZ"),
+        "endDateTime":   (now + timedelta(hours=24)).strftime("%Y-%m-%dT%H:%M:%SZ"),
     }
-    handler = handlers.get(tool_name)
-    if not handler:
-        return json.dumps({"error": f"Unknown tool: {tool_name}"})
+
     try:
-        return json.dumps(handler(tool_input), default=str)
+        async with httpx.AsyncClient(timeout=8.0) as client:
+            resp = await client.get(
+                "https://app.ticketmaster.com/discovery/v2/events.json",
+                params=params,
+            )
+            resp.raise_for_status()
+            data = resp.json()
+    except Exception as exc:
+        logger.warning("Ticketmaster API error: %s — falling back to mock events", exc)
+        return None
+
+    raw_events = data.get("_embedded", {}).get("events", [])
+    events: list[dict] = []
+
+    for e in raw_events:
+        venues = e.get("_embedded", {}).get("venues", [{}])
+        venue  = venues[0] if venues else {}
+        loc    = venue.get("location", {})
+
+        lat_str = loc.get("latitude")
+        lng_str = loc.get("longitude")
+        if not lat_str or not lng_str:
+            continue
+
+        start_info = e.get("dates", {}).get("start", {})
+        start_iso  = start_info.get("dateTime") or start_info.get("localDate")
+        if not start_iso:
+            continue
+
+        try:
+            start_dt = datetime.fromisoformat(start_iso.replace("Z", "+00:00")).replace(tzinfo=None)
+        except ValueError:
+            continue
+
+        end_dt = start_dt + timedelta(hours=3)
+
+        # Map Ticketmaster segment to our category
+        classifications = e.get("classifications", [{}])
+        segment = classifications[0].get("segment", {}).get("name", "").lower() if classifications else ""
+        category = _TM_CATEGORY_MAP.get(segment, "conference")
+
+        attendance = _TM_ATTENDANCE.get(category, 2500)
+
+        events.append({
+            "id":                  f"tm_{e.get('id', '')}",
+            "name":                e.get("name", "Unknown Event"),
+            "location_name":       venue.get("name", "Unknown Venue"),
+            "latitude":            float(lat_str),
+            "longitude":           float(lng_str),
+            "expected_attendance": attendance,
+            "start_time":          start_dt.isoformat(),
+            "end_time":            end_dt.isoformat(),
+            "category":            category,
+            "description":         f"{e.get('name')} at {venue.get('name', 'Unknown Venue')}",
+            "source":              "ticketmaster",
+        })
+
+    logger.info("Ticketmaster: fetched %d event(s) near (%.4f, %.4f)", len(events), latitude, longitude)
+    return events
+
+
+# ---------------------------------------------------------------------------
+# Updated async get_events_for_today (tries Ticketmaster, falls back to mock)
+# ---------------------------------------------------------------------------
+
+async def _get_events_for_today_async(
+    latitude: float,
+    longitude: float,
+    radius_km: float = 10.0,
+    min_attendance: int = 200,
+) -> dict:
+    # Try live API first
+    live_events = await _fetch_ticketmaster_events(latitude, longitude, radius_km)
+    source = "ticketmaster" if live_events is not None else "mock"
+
+    if live_events is not None:
+        events = live_events
+    else:
+        events = _build_mock_events()
+
+    scored = [_score_event(e) for e in events if e["expected_attendance"] >= min_attendance]
+    scored.sort(key=lambda e: e["opportunity_score"], reverse=True)
+
+    return {
+        "date":      datetime.utcnow().strftime("%Y-%m-%d"),
+        "location":  f"({latitude:.4f}, {longitude:.4f})",
+        "centre":    {"latitude": latitude, "longitude": longitude},
+        "radius_km": radius_km,
+        "source":    source,
+        "events":    scored,
+        "total":     len(scored),
+    }
+
+
+async def handle_event_tool_call(tool_name: str, tool_input: dict[str, Any]) -> str:
+    try:
+        if tool_name == "get_events_for_today":
+            result = await _get_events_for_today_async(**tool_input)
+            return json.dumps(result, default=str)
+        elif tool_name == "search_local_events":
+            return json.dumps(_search_local_events(**tool_input), default=str)
+        elif tool_name == "get_event_details":
+            return json.dumps(_get_event_details(**tool_input), default=str)
+        elif tool_name == "estimate_foot_traffic":
+            return json.dumps(_estimate_foot_traffic(**tool_input), default=str)
+        else:
+            return json.dumps({"error": f"Unknown tool: {tool_name}"})
     except Exception as exc:
         return json.dumps({"error": str(exc)})

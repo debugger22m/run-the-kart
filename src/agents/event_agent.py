@@ -47,7 +47,7 @@ class EventAgent(BaseAgent):
         self.load_skill(DemandForecastingSkill())
 
     async def handle_own_tool_call(self, tool_name: str, tool_input: dict[str, Any]) -> str:
-        return handle_event_tool_call(tool_name, tool_input)
+        return await handle_event_tool_call(tool_name, tool_input)
 
     async def find_events(
         self,
