@@ -1,3 +1,4 @@
+import asyncio
 import random
 from typing import Optional
 
@@ -224,6 +225,10 @@ async def set_city(request: Request, body: CityRequest):
     if state.loop.status.config:
         state.loop.status.config.latitude  = body.lat
         state.loop.status.config.longitude = body.lng
+
+    # Fire an immediate orchestration cycle in the background so the map
+    # populates right away instead of waiting for the next loop tick.
+    asyncio.create_task(state.orchestrator.run_cycle())
 
     return {
         "message": f"City updated to {body.name}",
