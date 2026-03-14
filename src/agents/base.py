@@ -11,6 +11,7 @@ Skills extend an agent's capabilities without changing its core loop:
   - agent.delegate_to(other)  → sub-agent call (agent-to-agent)
 """
 
+import json
 import logging
 import os
 from abc import ABC, abstractmethod
@@ -23,7 +24,7 @@ if TYPE_CHECKING:
 
 logger = logging.getLogger(__name__)
 
-DEFAULT_MODEL = "claude-opus-4-5"
+DEFAULT_MODEL = "claude-sonnet-4-5"
 
 
 class BaseAgent(ABC):
@@ -116,17 +117,38 @@ class BaseAgent(ABC):
         logger.info("[%s] Starting run. Skills: %s. Task: %s", self.name, self.loaded_skills(), user_message[:100])
 
         for iteration in range(self.max_iterations):
-            response = await self._client.messages.create(
-                model=self.model,
-                max_tokens=self.max_tokens,
-                system=self.system_prompt,
-                tools=self.tools,
-                messages=messages,
-            )
+            active_tools = self.tools
+            kwargs: dict[str, Any] = {
+                "model": self.model,
+                "max_tokens": self.max_tokens,
+                "system": self.system_prompt,
+                "messages": messages,
+            }
+            if active_tools:
+                kwargs["tools"] = active_tools
+                # One tool call per turn: every tool_use is guaranteed a
+                # tool_result, preventing 400 "unmatched tool_use" errors.
+                kwargs["tool_choice"] = {"type": "auto", "disable_parallel_tool_use": True}
+
+            response = await self._client.messages.create(**kwargs)
 
             logger.debug("[%s] Iteration %d — stop_reason: %s", self.name, iteration, response.stop_reason)
 
-            assistant_content = [block.model_dump() for block in response.content]
+            # Serialize only the fields the API needs — model_dump() can include
+            # extra SDK-internal fields that cause the API to reject the replayed message.
+            assistant_content = []
+            for block in response.content:
+                if block.type == "tool_use":
+                    assistant_content.append({
+                        "type": "tool_use",
+                        "id": block.id,
+                        "name": block.name,
+                        "input": block.input,
+                    })
+                elif block.type == "text":
+                    assistant_content.append({"type": "text", "text": block.text})
+                else:
+                    assistant_content.append(block.model_dump())
             messages.append({"role": "assistant", "content": assistant_content})
 
             if response.stop_reason == "end_turn":
@@ -141,7 +163,13 @@ class BaseAgent(ABC):
                 for block in response.content:
                     if block.type == "tool_use":
                         logger.info("[%s] Tool call: %s", self.name, block.name)
-                        result = await self.handle_tool_call(block.name, block.input)
+                        try:
+                            result = await self.handle_tool_call(block.name, block.input)
+                        except Exception as exc:
+                            # Always return a tool_result for every tool_use block —
+                            # missing results cause Anthropic to reject the next message.
+                            logger.error("[%s] Tool '%s' raised: %s", self.name, block.name, exc)
+                            result = json.dumps({"error": str(exc)})
                         tool_results.append({
                             "type": "tool_result",
                             "tool_use_id": block.id,
