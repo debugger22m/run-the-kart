@@ -6,7 +6,6 @@ import {
   getLoopConfig,
   fleetSummary,
 } from "../_shared/db.ts";
-import type { Cart } from "../_shared/types.ts";
 
 const corsHeaders = {
   "Access-Control-Allow-Origin": "*",
@@ -29,7 +28,43 @@ Deno.serve(async (req: Request) => {
     // 3. Get loop config
     const loopConfig = await getLoopConfig(client);
 
-    // 4. Build idle carts list
+    // 4. Fetch recent events from DB (discovered in last 24h)
+    const since = new Date(Date.now() - 24 * 60 * 60 * 1000).toISOString();
+    const { data: eventRows } = await client
+      .from("events")
+      .select("external_id, name, location_name, lat, lng, start_time, end_time, category, opportunity_score")
+      .gte("start_time", since)
+      .order("opportunity_score", { ascending: false })
+      .limit(20);
+
+    const events = (eventRows ?? []).map((r: Record<string, unknown>) => ({
+      id: r["external_id"] as string,
+      name: r["name"] as string,
+      location_name: r["location_name"] as string,
+      lat: r["lat"] as number,
+      lng: r["lng"] as number,
+      start_time: r["start_time"] as string,
+      end_time: r["end_time"] as string,
+      category: r["category"] as string | undefined,
+      opportunity_score: r["opportunity_score"] as number | undefined,
+    }));
+
+    // 5. Fetch recent orchestration runs
+    const { data: runRows } = await client
+      .from("orchestration_runs")
+      .select("completed_at, events_discovered, schedules_created, errors")
+      .order("completed_at", { ascending: false })
+      .limit(5);
+
+    const recentCycles = (runRows ?? []).map((r: Record<string, unknown>, i: number) => ({
+      cycle: (loopConfig.cycle_count ?? 0) - i,
+      completed_at: r["completed_at"] as string,
+      events_found: r["events_discovered"] as number,
+      schedules_created: r["schedules_created"] as number,
+      errors: (r["errors"] as string[]) ?? [],
+    }));
+
+    // 6. Build idle carts list
     const idleCarts: Array<{ id: string; name: string; status: string; lat: number | null; lng: number | null }> = [];
     for (const [, cart] of fleet.carts) {
       if (cart.status === "idle") {
@@ -49,6 +84,7 @@ Deno.serve(async (req: Request) => {
     const data = {
       fleet: fleetSummary(fleet),
       schedules,
+      events,
       loop: {
         running: loopConfig.enabled,
         cycle_count: loopConfig.cycle_count,
@@ -57,7 +93,7 @@ Deno.serve(async (req: Request) => {
           interval_seconds: loopConfig.interval_seconds,
           radius_km: loopConfig.radius_km,
         },
-        recent_cycles: [],
+        recent_cycles: recentCycles,
       },
       idle_carts: idleCarts,
       city: {

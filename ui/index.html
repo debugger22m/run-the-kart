@@ -634,7 +634,7 @@ async function refresh() {
     data = await res.json();
   } catch (e) {
     log(`API error: ${e.message}`, 'red');
-    return;
+    return null;
   }
 
   const { fleet, schedules, loop, idle_carts, city } = data;
@@ -679,10 +679,8 @@ async function refresh() {
   // ── Detect new cycles ──────────────────────────────────────────────
   if (loop.cycle_count > prevCycleCount) {
     const recent = loop.recent_cycles ?? [];
-    // Log all newly completed cycles
     for (const c of recent) {
-      if (c.cycle > prevCycleCount) {
-        const expired = c.expired_schedules || 0;
+      if ((c.cycle ?? 0) > prevCycleCount) {
         const created = c.schedules_created || 0;
         const evts    = c.events_found || 0;
         if (c.errors && c.errors.length > 0) {
@@ -691,11 +689,8 @@ async function refresh() {
         } else if (created > 0) {
           log(`✦ Cycle #${c.cycle} — ${created} carts deployed to ${evts} events`, 'purple');
           toast(`🛺 ${created} carts deployed across ${evts} events`, 'green', 4000);
-        } else if (expired > 0) {
-          log(`↺ Cycle #${c.cycle} — ${expired} schedules expired, carts freed`, 'orange');
-          toast(`↺ ${expired} carts returned to idle — awaiting new assignments`, 'blue', 3000);
         } else {
-          log(`· Cycle #${c.cycle} — ${evts} events found, all carts busy`, 'blue');
+          log(`· Cycle #${c.cycle} — ${evts} events found`, 'blue');
         }
       }
     }
@@ -712,12 +707,31 @@ async function refresh() {
     ? '$' + Math.round(totalRev).toLocaleString()
     : '$—';
 
-  // ── Event markers ──────────────────────────────────────────────────
+  // ── Event markers (from DB events + active schedule venues) ───────
   const seenEventIds = new Set();
-  for (const s of schedules) {
-    const eid = s.event_name;  // use name as key (no real event_id in schedule)
-    seenEventIds.add(eid);
 
+  // Show events discovered by the agent
+  const events = data.events ?? [];
+  for (const e of events) {
+    if (!e.lat || !e.lng) continue;
+    const eid = e.id || e.name;
+    seenEventIds.add(eid);
+    if (!eventMarkers[eid]) {
+      const m = L.marker([e.lat, e.lng], { icon: eventIcon(e.category) })
+        .addTo(map)
+        .bindPopup(`
+          <b>${e.name}</b><br>
+          📍 ${e.location_name}<br>
+          🎯 Score: ${Math.round(e.opportunity_score ?? 0)}
+        `);
+      eventMarkers[eid] = m;
+    }
+  }
+
+  // Also pin venues from active schedules (in case event isn't in events table)
+  for (const s of schedules) {
+    const eid = s.schedule_id;
+    seenEventIds.add(eid);
     if (!eventMarkers[eid]) {
       const m = L.marker([s.coordinates.lat, s.coordinates.lng], { icon: eventIcon(s.category) })
         .addTo(map)
@@ -832,6 +846,8 @@ async function refresh() {
         </div>`;
     }).join('');
   }
+
+  return data;
 }
 
 function flyTo(lat, lng) {
@@ -943,6 +959,7 @@ document.getElementById('city-input').addEventListener('keydown', e => {
 
 // ── Poll every 5 seconds ──────────────────────────────────────────────
 const POLL_MS = 5000;
+let orchestrating = false;
 
 function animateBar() {
   const bar = document.getElementById('refresh-bar');
@@ -954,8 +971,55 @@ function animateBar() {
   });
 }
 
+// ── Trigger an orchestration cycle ────────────────────────────────────
+async function triggerOrchestration() {
+  if (orchestrating) return;
+  orchestrating = true;
+  log('🤖 Triggering autonomous orchestration cycle…', 'blue');
+  try {
+    const res = await fetch('/api/v1/orchestrate', { method: 'POST' });
+    const data = await res.json();
+    if (data.error) {
+      log(`⚠ Orchestration error: ${data.error.slice(0, 80)}`, 'red');
+    } else {
+      const created = data.new_schedules_created ?? 0;
+      const evts    = data.discovered_events?.length ?? 0;
+      const expired = data.expired_schedules_removed ?? 0;
+      if (created > 0) {
+        log(`✦ Orchestration complete — ${created} carts deployed to ${evts} events`, 'purple');
+        toast(`🛺 ${created} carts deployed across ${evts} events`, 'green', 4000);
+      } else if (expired > 0) {
+        log(`↺ Orchestration complete — ${expired} schedules expired, carts freed`, 'orange');
+      } else {
+        log(`· Orchestration complete — ${evts} events found, no new assignments`, 'blue');
+      }
+    }
+  } catch (e) {
+    log(`Orchestration fetch error: ${e.message}`, 'red');
+  } finally {
+    orchestrating = false;
+  }
+}
+
 async function tick() {
   await refresh();
+
+  // ── Client-side autonomous loop trigger ───────────────────────────
+  // Edge functions can't self-schedule, so the browser drives orchestration.
+  try {
+    const res  = await fetch('/api/v1/dashboard');
+    const data = await res.json();
+    const loop = data.loop ?? {};
+    if (loop.running) {
+      const intervalMs  = (loop.config?.interval_seconds ?? 300) * 1000;
+      const lastRunMs   = loop.last_run_at ? new Date(loop.last_run_at).getTime() : 0;
+      const elapsedMs   = Date.now() - lastRunMs;
+      if (elapsedMs >= intervalMs) {
+        triggerOrchestration(); // fire-and-forget; next refresh will pick up results
+      }
+    }
+  } catch (_) { /* ignore — refresh() already logged any errors */ }
+
   animateBar();
   setTimeout(tick, POLL_MS);
 }
