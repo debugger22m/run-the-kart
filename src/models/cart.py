@@ -11,6 +11,17 @@ class CartStatus(str, Enum):
     MAINTENANCE = "maintenance"
 
 
+class CartType(str, Enum):
+    TACO = "taco"
+    ITALIAN = "italian"
+    BURGER = "burger"
+    PIZZA = "pizza"
+    ASIAN = "asian"
+    BBQ = "bbq"
+    DESSERT = "dessert"
+    MEDITERRANEAN = "mediterranean"
+
+
 class Coordinates(BaseModel):
     lat: float
     lng: float
@@ -23,6 +34,7 @@ class Cart(BaseModel):
     id: str = Field(default_factory=lambda: str(uuid.uuid4()))
     name: str
     status: CartStatus = CartStatus.IDLE
+    cart_type: CartType = CartType.TACO
     current_location: Optional[Coordinates] = None
     max_orders_per_hour: int = 50
     assigned_schedule_id: Optional[str] = None
@@ -47,5 +59,6 @@ class Cart(BaseModel):
             "id": self.id,
             "name": self.name,
             "status": self.status.value,
+            "cart_type": self.cart_type.value,
             "location": str(self.current_location) if self.current_location else None,
         }
