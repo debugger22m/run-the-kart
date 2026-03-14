@@ -1,3 +1,5 @@
+import asyncio
+import random
 from typing import Optional
 
 from fastapi import APIRouter, Body, HTTPException, Request
@@ -45,6 +47,12 @@ class AutonomousStartRequest(BaseModel):
     radius_km: float = 10.0
     hours_ahead: int = 12
     interval_seconds: int = 30
+
+
+class CityRequest(BaseModel):
+    name: str
+    lat: float
+    lng: float
 
 
 # ---------------------------------------------------------------------------
@@ -186,6 +194,51 @@ async def autonomous_status(request: Request):
 
 
 # ---------------------------------------------------------------------------
+# City — change the operating city, reposition fleet, update loop centre
+# ---------------------------------------------------------------------------
+
+@router.post("/city", summary="Change operating city and reposition fleet")
+async def set_city(request: Request, body: CityRequest):
+    """
+    Geocode a new city and update the autonomous loop's search centre.
+    Scatters all idle carts around the new city centre so events are reachable.
+    Also cancels any en-route schedules so carts start fresh in the new city.
+    """
+    state = get_state(request)
+
+    # Cancel all active schedules and return carts to idle
+    for schedule in state.orchestrator.get_active_schedules():
+        state.orchestrator.complete_schedule(schedule.id)
+
+    # Reposition every cart within ±3 km of the city centre
+    for cart in state.fleet.carts.values():
+        cart.current_location = Coordinates(
+            lat=body.lat + random.uniform(-0.027, 0.027),
+            lng=body.lng + random.uniform(-0.036, 0.036),
+        )
+        cart.go_idle()
+
+    # Pin the orchestrator's search centre to this city (highest priority)
+    state.orchestrator.set_city(body.name, body.lat, body.lng)
+
+    # Also update loop config so status endpoint shows the right centre
+    if state.loop.status.config:
+        state.loop.status.config.latitude  = body.lat
+        state.loop.status.config.longitude = body.lng
+
+    # Fire an immediate orchestration cycle in the background so the map
+    # populates right away instead of waiting for the next loop tick.
+    asyncio.create_task(state.orchestrator.run_cycle())
+
+    return {
+        "message": f"City updated to {body.name}",
+        "lat": body.lat,
+        "lng": body.lng,
+        "carts_repositioned": len(state.fleet.carts),
+    }
+
+
+# ---------------------------------------------------------------------------
 # Dashboard — single endpoint for the live UI (avoids multiple round-trips)
 # ---------------------------------------------------------------------------
 
@@ -209,9 +262,18 @@ async def dashboard(request: Request):
         if c.status.value == "idle"
     ]
 
+    import os
+    city = {
+        "name": state.orchestrator._city_name,
+        "lat":  state.orchestrator._city_override[0] if state.orchestrator._city_override else None,
+        "lng":  state.orchestrator._city_override[1] if state.orchestrator._city_override else None,
+        "events_source": "ticketmaster" if os.getenv("TICKETMASTER_API_KEY") else "mock",
+    }
+
     return {
         "fleet": fleet,
         "schedules": schedules,
         "loop": loop,
         "idle_carts": idle_carts,
+        "city": city,
     }

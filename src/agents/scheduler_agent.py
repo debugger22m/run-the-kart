@@ -54,23 +54,29 @@ class SchedulerAgent(BaseAgent):
 
     @property
     def tools(self) -> list[dict]:
-        # Skills provide prompt guidance only — suppress their tool schemas so
-        # Claude reasons purely from the provided data and returns JSON directly.
+        # Reasoning-only — strip all tool schemas (including from skills).
         return []
+
+    @property
+    def system_prompt(self) -> str:
+        # Do NOT merge skill prompt_modules here — the FleetOptimizationSkill
+        # tells Claude to "call check_assignment_conflicts" which doesn't exist
+        # in reasoning-only mode and causes Claude to output nothing useful.
+        return self._base_system_prompt
 
     async def handle_own_tool_call(self, tool_name: str, tool_input: dict[str, Any]) -> str:
         return json.dumps({"error": f"No tools in reasoning-only mode: {tool_name}"})
 
     async def create_schedules(self, fleet: Fleet, events: list[dict]) -> list[Schedule]:
         """
-        Assign carts to events, maximising total revenue with conflict prevention
-        and geographic balance checks.
+        Assign carts to events in a single LLM turn — no tool calls, pure JSON output.
         """
         available_carts = fleet.get_available_carts()
         if not available_carts:
             logger.warning("SchedulerAgent: No available carts in fleet.")
             return []
 
+        now = datetime.utcnow().isoformat()
         cart_summaries = [
             {
                 "cart_id": c.id,
@@ -82,23 +88,36 @@ class SchedulerAgent(BaseAgent):
         ]
 
         task = (
-            f"Maximise total fleet revenue by assigning food trucks to the best events.\n\n"
-            f"Available carts:\n{json.dumps(cart_summaries, indent=2)}\n\n"
-            f"Events (pre-scored, highest opportunity first):\n{json.dumps(events, indent=2)}\n\n"
-            f"Use routing, conflict checking, and coverage balance tools. "
-            f"Return confirmed assignments as a JSON array."
+            f"Current UTC time: {now}\n\n"
+            f"Available carts ({len(cart_summaries)}):\n{json.dumps(cart_summaries, indent=2)}\n\n"
+            f"Events to cover ({len(events)}, best first):\n{json.dumps(events, indent=2)}\n\n"
+            f"Assign each idle cart to the best nearby event. "
+            f"Output ONLY a JSON array. No explanation, no markdown. "
+            f"Each element: {{cart_id, event_id, event_name, destination_lat, destination_lng, "
+            f"arrival_time, departure_time, estimated_revenue, opportunity_score}}"
         )
 
         raw_response = await self.run(task)
+        logger.debug("SchedulerAgent raw response: %s", raw_response[:500])
 
         assignments: list[dict] = []
+        # Strip markdown fences if present, then find the JSON array
+        cleaned = raw_response.strip()
+        if cleaned.startswith("```"):
+            cleaned = "\n".join(cleaned.split("\n")[1:])
+        if cleaned.endswith("```"):
+            cleaned = "\n".join(cleaned.split("\n")[:-1])
+
         try:
-            start = raw_response.find("[")
-            end = raw_response.rfind("]") + 1
+            start = cleaned.find("[")
+            end = cleaned.rfind("]") + 1
             if start != -1 and end > start:
-                assignments = json.loads(raw_response[start:end])
+                assignments = json.loads(cleaned[start:end])
+            else:
+                logger.error("SchedulerAgent: no JSON array found in response: %s", cleaned[:300])
+                return []
         except (json.JSONDecodeError, ValueError) as exc:
-            logger.error("SchedulerAgent response parse error: %s\nRaw: %s", exc, raw_response)
+            logger.error("SchedulerAgent parse error: %s\nRaw: %s", exc, cleaned[:300])
             return []
 
         schedules = []

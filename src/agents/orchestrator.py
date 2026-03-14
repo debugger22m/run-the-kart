@@ -54,6 +54,14 @@ class OrchestratorAgent:
         self._event_agent = EventAgent()
         self._scheduler_agent = SchedulerAgent()
         self._active_schedules: dict[str, Schedule] = {}
+        self._city_override: tuple[float, float] | None = None
+        self._city_name: str = "Salt Lake City, UT"
+
+    def set_city(self, name: str, lat: float, lng: float) -> None:
+        """Pin the search centre to an explicit city — overrides fleet centroid."""
+        self._city_override = (lat, lng)
+        self._city_name = name
+        logger.info("Orchestrator: city set to %s (%.4f, %.4f)", name, lat, lng)
 
     # ------------------------------------------------------------------
     # Public API
@@ -76,8 +84,11 @@ class OrchestratorAgent:
         if expired:
             logger.info("Orchestrator: auto-expired %d schedule(s) — carts returned to idle.", expired)
 
-        # Step 2: Derive search centre from fleet positions
-        if latitude is None or longitude is None:
+        # Step 2: City override > caller-provided > fleet centroid
+        if self._city_override:
+            latitude, longitude = self._city_override
+            logger.info("Orchestrator: using city override %s — (%.4f, %.4f)", self._city_name, latitude, longitude)
+        elif latitude is None or longitude is None:
             latitude, longitude = self._fleet_centroid()
             logger.info("Orchestrator: search centre from fleet centroid — (%.4f, %.4f)", latitude, longitude)
 
