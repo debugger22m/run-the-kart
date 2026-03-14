@@ -117,13 +117,20 @@ class BaseAgent(ABC):
         logger.info("[%s] Starting run. Skills: %s. Task: %s", self.name, self.loaded_skills(), user_message[:100])
 
         for iteration in range(self.max_iterations):
-            response = await self._client.messages.create(
-                model=self.model,
-                max_tokens=self.max_tokens,
-                system=self.system_prompt,
-                tools=self.tools,
-                messages=messages,
-            )
+            active_tools = self.tools
+            kwargs: dict[str, Any] = {
+                "model": self.model,
+                "max_tokens": self.max_tokens,
+                "system": self.system_prompt,
+                "messages": messages,
+            }
+            if active_tools:
+                kwargs["tools"] = active_tools
+                # One tool call per turn: every tool_use is guaranteed a
+                # tool_result, preventing 400 "unmatched tool_use" errors.
+                kwargs["tool_choice"] = {"type": "auto", "disable_parallel_tool_use": True}
+
+            response = await self._client.messages.create(**kwargs)
 
             logger.debug("[%s] Iteration %d — stop_reason: %s", self.name, iteration, response.stop_reason)
 

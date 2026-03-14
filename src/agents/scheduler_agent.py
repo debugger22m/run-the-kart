@@ -11,13 +11,13 @@ Skills loaded:
 
 import json
 import logging
-from datetime import datetime
+import os
+from datetime import datetime, timedelta
 from typing import Any
 
 from .base import BaseAgent
 from ..models import Fleet, Schedule, Coordinates
 from ..models.schedule import Event, ScheduleStatus
-from ..tools.maps_tools import MAPS_TOOLS, handle_maps_tool_call
 from ..skills import FleetOptimizationSkill
 
 logger = logging.getLogger(__name__)
@@ -25,16 +25,18 @@ logger = logging.getLogger(__name__)
 SYSTEM_PROMPT = """\
 You are the Scheduler Agent for an autonomous food truck fleet management system in Salt Lake City, UT.
 
-You receive scored events (highest opportunity_score first) and available carts with GPS coordinates.
-Your goal: maximise TOTAL fleet revenue across all assignments.
+You receive pre-scored events (highest opportunity_score first) and available carts with GPS coordinates.
+Your goal: produce the optimal cart-to-event assignment to maximise TOTAL fleet revenue.
 
-Rules:
-- Assign one cart per event (two carts only if expected_attendance > 3000).
-- Never double-book a cart (use check_assignment_conflicts before confirming).
-- Use find_nearest_available_cart to pick the best cart for each event.
-- After all assignments, call check_coverage_balance once to validate fleet spread.
+Assignment rules:
+- Assign the geographically nearest idle cart to each top-scored event.
+- Allow two carts at an event only if expected_attendance > 5000.
+- Never double-book a cart (each cart_id may appear at most once).
+- Prefer geographic spread — avoid clustering all carts at one venue.
+- Only assign as many carts as there are events (cap at fleet size).
 
-Return a JSON array of confirmed assignments. Each object must include:
+Output ONLY a valid JSON array — no prose, no markdown fences.
+Each object must include:
   cart_id, event_id, event_name, destination_lat, destination_lng,
   arrival_time (ISO), departure_time (ISO), estimated_revenue, opportunity_score
 """
@@ -45,12 +47,19 @@ class SchedulerAgent(BaseAgent):
         super().__init__(
             name="SchedulerAgent",
             system_prompt=SYSTEM_PROMPT,
-            tools=MAPS_TOOLS,
+            tools=[],          # reasoning-only — no tool calls, one-shot JSON output
+            max_iterations=3,  # should complete in a single turn
         )
         self.load_skill(FleetOptimizationSkill())
 
+    @property
+    def tools(self) -> list[dict]:
+        # Skills provide prompt guidance only — suppress their tool schemas so
+        # Claude reasons purely from the provided data and returns JSON directly.
+        return []
+
     async def handle_own_tool_call(self, tool_name: str, tool_input: dict[str, Any]) -> str:
-        return handle_maps_tool_call(tool_name, tool_input)
+        return json.dumps({"error": f"No tools in reasoning-only mode: {tool_name}"})
 
     async def create_schedules(self, fleet: Fleet, events: list[dict]) -> list[Schedule]:
         """
@@ -125,11 +134,21 @@ class SchedulerAgent(BaseAgent):
             category=event_data.get("category"),
         )
 
+        # DEMO_EXPIRE_SECS: short-circuit departure_time so carts recycle quickly in demos.
+        # Set DEMO_EXPIRE_SECS=45 in .env to see autonomous reassignment every ~45 seconds.
+        demo_secs = int(os.getenv("DEMO_EXPIRE_SECS", "0"))
+        if demo_secs > 0:
+            departure_time = datetime.utcnow() + timedelta(seconds=demo_secs)
+        else:
+            departure_time = datetime.fromisoformat(
+                assignment.get("departure_time", event_data["end_time"])
+            )
+
         return Schedule(
             cart_id=assignment["cart_id"],
             event=event,
             arrival_time=datetime.fromisoformat(assignment.get("arrival_time", event_data["start_time"])),
-            departure_time=datetime.fromisoformat(assignment.get("departure_time", event_data["end_time"])),
+            departure_time=departure_time,
             status=ScheduleStatus.CONFIRMED,
             estimated_revenue=assignment.get("estimated_revenue"),
         )
