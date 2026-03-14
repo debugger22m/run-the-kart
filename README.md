@@ -4,6 +4,8 @@
 
 Deploy a fleet of food trucks to the highest-value events in any US city — fully autonomously, with zero human input after startup.
 
+🌐 **Live demo:** [run-the-kart.vercel.app](https://run-the-kart.vercel.app)
+
 ![Run The Kart Dashboard](assets/dashboard.png)
 
 ---
