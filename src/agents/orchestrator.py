@@ -54,20 +54,24 @@ class OrchestratorAgent:
 
     async def run_cycle(
         self,
-        latitude: float,
-        longitude: float,
+        latitude: float | None = None,
+        longitude: float | None = None,
         radius_km: float = 10.0,
         hours_ahead: int = 12,
     ) -> OrchestrationResult:
         """
         Execute one full orchestration cycle:
-          1. Discover events near (latitude, longitude).
-          2. Schedule available carts to the best events.
-          3. Update fleet state.
-
-        Returns an OrchestrationResult with everything that happened.
+          1. Derive search centre from fleet positions (or use provided lat/lng).
+          2. Discover today's events in the area.
+          3. Schedule available carts to the best events.
+          4. Update fleet state.
         """
         errors: list[str] = []
+
+        # Derive search centre from the fleet's cart positions if not explicitly provided
+        if latitude is None or longitude is None:
+            latitude, longitude = self._fleet_centroid()
+            logger.info("Orchestrator: search centre derived from fleet — (%.4f, %.4f)", latitude, longitude)
 
         logger.info(
             "Orchestrator: starting cycle — centre=(%.4f, %.4f), radius=%dkm, window=%dh",
@@ -139,6 +143,16 @@ class OrchestratorAgent:
     # ------------------------------------------------------------------
     # Internal helpers
     # ------------------------------------------------------------------
+
+    def _fleet_centroid(self) -> tuple[float, float]:
+        """Return the average lat/lng of all carts that have a known location."""
+        located = [c for c in self.fleet.carts.values() if c.current_location]
+        if not located:
+            # Default to San Francisco if no cart locations are known
+            return 37.7749, -122.4194
+        lat = sum(c.current_location.lat for c in located) / len(located)
+        lng = sum(c.current_location.lng for c in located) / len(located)
+        return lat, lng
 
     def _apply_schedule(self, schedule: Schedule) -> None:
         """Push a schedule onto a cart and register it as active."""

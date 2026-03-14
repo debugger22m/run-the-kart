@@ -25,8 +25,8 @@ class AddCartRequest(BaseModel):
 
 
 class OrchestrationRequest(BaseModel):
-    latitude: float
-    longitude: float
+    latitude: float | None = None   # derived from fleet positions if omitted
+    longitude: float | None = None  # derived from fleet positions if omitted
     radius_km: float = 10.0
     hours_ahead: int = 12
 
@@ -36,8 +36,8 @@ class CompleteScheduleRequest(BaseModel):
 
 
 class AutonomousStartRequest(BaseModel):
-    latitude: float
-    longitude: float
+    latitude: float | None = None   # derived from fleet positions if omitted
+    longitude: float | None = None  # derived from fleet positions if omitted
     radius_km: float = 10.0
     hours_ahead: int = 12
     interval_seconds: int = 30

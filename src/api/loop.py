@@ -18,8 +18,8 @@ logger = logging.getLogger(__name__)
 
 @dataclass
 class LoopConfig:
-    latitude: float
-    longitude: float
+    latitude: float | None = None   # derived from fleet centroid if None
+    longitude: float | None = None  # derived from fleet centroid if None
     radius_km: float = 10.0
     hours_ahead: int = 12
     interval_seconds: int = 30
@@ -41,8 +41,8 @@ class LoopStatus:
             "last_run_at": self.last_run_at.isoformat() if self.last_run_at else None,
             "last_error": self.last_error,
             "config": {
-                "latitude": self.config.latitude,
-                "longitude": self.config.longitude,
+                "latitude": self.config.latitude or "auto (fleet centroid)",
+                "longitude": self.config.longitude or "auto (fleet centroid)",
                 "radius_km": self.config.radius_km,
                 "interval_seconds": self.config.interval_seconds,
             } if self.config else None,
