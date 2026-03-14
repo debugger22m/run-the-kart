@@ -183,3 +183,35 @@ async def stop_autonomous(request: Request):
 async def autonomous_status(request: Request):
     state = get_state(request)
     return state.loop.status.to_dict()
+
+
+# ---------------------------------------------------------------------------
+# Dashboard — single endpoint for the live UI (avoids multiple round-trips)
+# ---------------------------------------------------------------------------
+
+@router.get("/dashboard", summary="All data needed by the live dashboard in one call")
+async def dashboard(request: Request):
+    state = get_state(request)
+    fleet = state.fleet.summary()
+    schedules = [s.model_dump_summary() for s in state.orchestrator.get_active_schedules()]
+    loop = state.loop.status.to_dict()
+
+    # Include idle cart positions so the map can show staging locations
+    idle_carts = [
+        {
+            "id": c.id,
+            "name": c.name,
+            "status": c.status.value,
+            "lat": c.current_location.lat if c.current_location else None,
+            "lng": c.current_location.lng if c.current_location else None,
+        }
+        for c in state.fleet.carts.values()
+        if c.status.value == "idle"
+    ]
+
+    return {
+        "fleet": fleet,
+        "schedules": schedules,
+        "loop": loop,
+        "idle_carts": idle_carts,
+    }

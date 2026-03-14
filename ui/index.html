@@ -1,0 +1,697 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Run The Kart — Fleet Command</title>
+
+  <!-- Leaflet -->
+  <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
+  <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+
+  <style>
+    /* ── Reset & base ─────────────────────────────────────────────────── */
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+    :root {
+      --bg:        #0d1117;
+      --surface:   #161b22;
+      --border:    #30363d;
+      --text:      #e6edf3;
+      --muted:     #8b949e;
+      --green:     #3fb950;
+      --blue:      #388bfd;
+      --orange:    #d29922;
+      --red:       #f85149;
+      --purple:    #bc8cff;
+      --accent:    #1f6feb;
+    }
+
+    html, body { height: 100%; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; background: var(--bg); color: var(--text); overflow: hidden; }
+
+    /* ── Layout ───────────────────────────────────────────────────────── */
+    #app { display: flex; height: 100vh; }
+
+    /* ── Sidebar ──────────────────────────────────────────────────────── */
+    #sidebar {
+      width: 340px;
+      min-width: 340px;
+      background: var(--surface);
+      border-right: 1px solid var(--border);
+      display: flex;
+      flex-direction: column;
+      overflow: hidden;
+    }
+
+    #sidebar-header {
+      padding: 18px 20px 14px;
+      border-bottom: 1px solid var(--border);
+      background: var(--bg);
+    }
+
+    #sidebar-header h1 {
+      font-size: 18px;
+      font-weight: 700;
+      letter-spacing: -.3px;
+      display: flex;
+      align-items: center;
+      gap: 8px;
+    }
+
+    .logo-icon { font-size: 22px; }
+
+    #sidebar-header .subtitle {
+      font-size: 11px;
+      color: var(--muted);
+      margin-top: 2px;
+      letter-spacing: .4px;
+      text-transform: uppercase;
+    }
+
+    #sidebar-body { flex: 1; overflow-y: auto; padding: 16px; display: flex; flex-direction: column; gap: 16px; }
+    #sidebar-body::-webkit-scrollbar { width: 4px; }
+    #sidebar-body::-webkit-scrollbar-thumb { background: var(--border); border-radius: 2px; }
+
+    /* ── Cards ────────────────────────────────────────────────────────── */
+    .card {
+      background: var(--bg);
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      overflow: hidden;
+    }
+
+    .card-header {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      padding: 10px 14px;
+      border-bottom: 1px solid var(--border);
+      font-size: 11px;
+      font-weight: 600;
+      letter-spacing: .6px;
+      text-transform: uppercase;
+      color: var(--muted);
+    }
+
+    .card-body { padding: 14px; }
+
+    /* ── Loop status badge ────────────────────────────────────────────── */
+    #loop-badge {
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+      padding: 3px 10px;
+      border-radius: 20px;
+      font-size: 11px;
+      font-weight: 600;
+      background: #1a2a1a;
+      color: var(--green);
+      border: 1px solid #2a4a2a;
+    }
+
+    #loop-badge.stopped { background: #2a1a1a; color: var(--red); border-color: #4a2a2a; }
+
+    .pulse-dot {
+      width: 7px; height: 7px; border-radius: 50%;
+      background: var(--green);
+      animation: pulse 1.4s ease-in-out infinite;
+    }
+    .pulse-dot.red { background: var(--red); animation: none; }
+
+    @keyframes pulse {
+      0%, 100% { opacity: 1; transform: scale(1); }
+      50% { opacity: .5; transform: scale(.7); }
+    }
+
+    /* ── Stat grid ────────────────────────────────────────────────────── */
+    .stat-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
+
+    .stat-item {
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: 6px;
+      padding: 10px 12px;
+    }
+
+    .stat-label { font-size: 10px; text-transform: uppercase; letter-spacing: .5px; color: var(--muted); margin-bottom: 4px; }
+    .stat-value { font-size: 24px; font-weight: 700; line-height: 1; }
+    .stat-value.green { color: var(--green); }
+    .stat-value.blue  { color: var(--blue); }
+    .stat-value.orange { color: var(--orange); }
+    .stat-value.purple { color: var(--purple); }
+
+    /* ── Schedule list ────────────────────────────────────────────────── */
+    #schedule-list { display: flex; flex-direction: column; gap: 8px; max-height: 340px; overflow-y: auto; }
+    #schedule-list::-webkit-scrollbar { width: 3px; }
+    #schedule-list::-webkit-scrollbar-thumb { background: var(--border); }
+
+    .schedule-item {
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: 6px;
+      padding: 9px 11px;
+      font-size: 12px;
+      transition: border-color .2s;
+    }
+    .schedule-item:hover { border-color: var(--accent); }
+
+    .schedule-item .event-name {
+      font-weight: 600;
+      color: var(--text);
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+    }
+
+    .schedule-item .meta {
+      display: flex;
+      justify-content: space-between;
+      margin-top: 5px;
+      color: var(--muted);
+      font-size: 11px;
+    }
+
+    .schedule-item .rev { color: var(--green); font-weight: 600; }
+
+    /* ── Activity log ────────────────────────────────────────────────── */
+    #activity-log {
+      display: flex;
+      flex-direction: column-reverse;
+      gap: 4px;
+      max-height: 180px;
+      overflow-y: auto;
+      font-size: 11px;
+    }
+    #activity-log::-webkit-scrollbar { width: 3px; }
+    #activity-log::-webkit-scrollbar-thumb { background: var(--border); }
+
+    .log-entry {
+      display: flex;
+      gap: 8px;
+      padding: 3px 0;
+      border-bottom: 1px solid #1a1f27;
+      animation: fadein .3s ease;
+    }
+    @keyframes fadein { from { opacity: 0; transform: translateY(-4px); } to { opacity: 1; transform: none; } }
+
+    .log-time { color: var(--muted); flex-shrink: 0; }
+    .log-msg.green { color: var(--green); }
+    .log-msg.blue  { color: var(--blue); }
+    .log-msg.orange { color: var(--orange); }
+    .log-msg.red   { color: var(--red); }
+
+    /* ── Refresh indicator ───────────────────────────────────────────── */
+    #refresh-bar {
+      height: 2px;
+      background: var(--accent);
+      width: 100%;
+      transform-origin: left;
+      transition: transform linear;
+    }
+
+    /* ── Map ─────────────────────────────────────────────────────────── */
+    #map-wrap { flex: 1; position: relative; }
+    #map { width: 100%; height: 100%; }
+
+    /* ── Map overlay ─────────────────────────────────────────────────── */
+    #map-overlay {
+      position: absolute;
+      top: 14px;
+      right: 14px;
+      z-index: 1000;
+      display: flex;
+      flex-direction: column;
+      gap: 8px;
+      pointer-events: none;
+    }
+
+    .map-badge {
+      background: rgba(13,17,23,.88);
+      border: 1px solid var(--border);
+      border-radius: 6px;
+      padding: 6px 12px;
+      font-size: 12px;
+      backdrop-filter: blur(6px);
+      pointer-events: auto;
+    }
+
+    .map-badge .label { color: var(--muted); font-size: 10px; text-transform: uppercase; letter-spacing: .5px; }
+    .map-badge .value { font-weight: 700; }
+
+    /* ── Legend ──────────────────────────────────────────────────────── */
+    #legend {
+      position: absolute;
+      bottom: 24px;
+      right: 14px;
+      z-index: 1000;
+      background: rgba(13,17,23,.88);
+      border: 1px solid var(--border);
+      border-radius: 6px;
+      padding: 10px 14px;
+      font-size: 11px;
+      backdrop-filter: blur(6px);
+      display: flex;
+      flex-direction: column;
+      gap: 6px;
+    }
+
+    .legend-item { display: flex; align-items: center; gap: 8px; color: var(--muted); }
+    .legend-dot { width: 10px; height: 10px; border-radius: 50%; flex-shrink: 0; }
+
+    /* ── Custom Leaflet markers ──────────────────────────────────────── */
+    .cart-marker-idle, .cart-marker-enroute {
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      border-radius: 50%;
+      font-size: 16px;
+      width: 32px !important;
+      height: 32px !important;
+      border: 2px solid transparent;
+      box-shadow: 0 2px 8px rgba(0,0,0,.5);
+    }
+
+    .cart-marker-idle {
+      background: #1a2e1a;
+      border-color: #3fb950;
+      animation: idle-pulse 2s ease-in-out infinite;
+    }
+
+    .cart-marker-enroute {
+      background: #0d1f3e;
+      border-color: #388bfd;
+    }
+
+    @keyframes idle-pulse {
+      0%, 100% { box-shadow: 0 0 0 0 rgba(63,185,80,.4); }
+      50% { box-shadow: 0 0 0 6px rgba(63,185,80,0); }
+    }
+
+    .event-marker {
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      border-radius: 50%;
+      font-size: 14px;
+      width: 28px !important;
+      height: 28px !important;
+      background: #2a1a3e;
+      border: 2px solid #bc8cff;
+      box-shadow: 0 2px 8px rgba(0,0,0,.5);
+    }
+
+    /* Leaflet dark tiles override */
+    .leaflet-layer,
+    .leaflet-control-zoom-in,
+    .leaflet-control-zoom-out,
+    .leaflet-control-attribution { filter: brightness(.85) contrast(1.05) saturate(.8); }
+
+    .leaflet-container { background: #0d1117; }
+  </style>
+</head>
+<body>
+<div id="app">
+
+  <!-- ═══════════════════════════ SIDEBAR ════════════════════════════════ -->
+  <aside id="sidebar">
+    <div id="refresh-bar" id="progress"></div>
+
+    <div id="sidebar-header">
+      <h1><span class="logo-icon">🛺</span> Run The Kart</h1>
+      <div class="subtitle">Autonomous Fleet Command · Salt Lake City, UT</div>
+    </div>
+
+    <div id="sidebar-body">
+
+      <!-- Loop status -->
+      <div class="card">
+        <div class="card-header">
+          Autonomous Loop
+          <span id="loop-badge">
+            <span class="pulse-dot" id="loop-dot"></span>
+            <span id="loop-label">—</span>
+          </span>
+        </div>
+        <div class="card-body">
+          <div class="stat-grid">
+            <div class="stat-item">
+              <div class="stat-label">Cycles Run</div>
+              <div class="stat-value purple" id="stat-cycles">—</div>
+            </div>
+            <div class="stat-item">
+              <div class="stat-label">Interval</div>
+              <div class="stat-value orange" id="stat-interval">—</div>
+            </div>
+          </div>
+          <div style="margin-top:10px; font-size:11px; color:var(--muted)">
+            Last cycle: <span id="stat-last-run" style="color:var(--text)">—</span>
+          </div>
+        </div>
+      </div>
+
+      <!-- Fleet stats -->
+      <div class="card">
+        <div class="card-header">Fleet Status</div>
+        <div class="card-body">
+          <div class="stat-grid">
+            <div class="stat-item">
+              <div class="stat-label">Idle</div>
+              <div class="stat-value green" id="stat-idle">—</div>
+            </div>
+            <div class="stat-item">
+              <div class="stat-label">En Route</div>
+              <div class="stat-value blue" id="stat-enroute">—</div>
+            </div>
+            <div class="stat-item">
+              <div class="stat-label">Total Carts</div>
+              <div class="stat-value" id="stat-total">—</div>
+            </div>
+            <div class="stat-item">
+              <div class="stat-label">Active Jobs</div>
+              <div class="stat-value orange" id="stat-jobs">—</div>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <!-- Active schedules -->
+      <div class="card">
+        <div class="card-header">
+          Active Deployments
+          <span id="schedule-count" style="color:var(--text)">0</span>
+        </div>
+        <div class="card-body" style="padding:10px">
+          <div id="schedule-list"><div style="color:var(--muted);font-size:12px;text-align:center;padding:12px">No active deployments</div></div>
+        </div>
+      </div>
+
+      <!-- Activity log -->
+      <div class="card">
+        <div class="card-header">Activity Log</div>
+        <div class="card-body" style="padding:8px 12px">
+          <div id="activity-log"></div>
+        </div>
+      </div>
+
+    </div><!-- /sidebar-body -->
+  </aside>
+
+  <!-- ═══════════════════════════ MAP ═════════════════════════════════════ -->
+  <div id="map-wrap">
+    <div id="map"></div>
+
+    <!-- Overlays -->
+    <div id="map-overlay">
+      <div class="map-badge">
+        <div class="label">Wave</div>
+        <div class="value" id="ov-wave">—</div>
+      </div>
+      <div class="map-badge">
+        <div class="label">Est. Revenue / Cycle</div>
+        <div class="value green" id="ov-revenue">$—</div>
+      </div>
+    </div>
+
+    <!-- Legend -->
+    <div id="legend">
+      <div class="legend-item"><div class="legend-dot" style="background:#3fb950;border:2px solid #3fb950"></div>Cart — Idle</div>
+      <div class="legend-item"><div class="legend-dot" style="background:#388bfd;border:2px solid #388bfd"></div>Cart — En Route</div>
+      <div class="legend-item"><div class="legend-dot" style="background:#bc8cff;border:2px solid #bc8cff"></div>Event Venue</div>
+    </div>
+  </div>
+
+</div><!-- /app -->
+
+<script>
+// ═══════════════════════════════════════════════════════════════════════════
+// Map init — Leaflet + OpenStreetMap (no API key)
+// ═══════════════════════════════════════════════════════════════════════════
+const SLC = [40.7608, -111.8910];
+
+const map = L.map('map', {
+  center: SLC,
+  zoom: 13,
+  zoomControl: true,
+});
+
+L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+  attribution: '© <a href="https://openstreetmap.org">OpenStreetMap</a> contributors',
+  maxZoom: 19,
+}).addTo(map);
+
+// ── Marker pools ────────────────────────────────────────────────────────
+const cartMarkers  = {};   // cart_id  → { marker, line }
+const eventMarkers = {};   // event_id → marker
+
+function cartIcon(status) {
+  const cls = status === 'idle' ? 'cart-marker-idle' : 'cart-marker-enroute';
+  return L.divIcon({
+    className: '',
+    html: `<div class="${cls}">🛺</div>`,
+    iconSize: [32, 32],
+    iconAnchor: [16, 16],
+  });
+}
+
+function eventIcon(category) {
+  const emojis = { sports:'🏟️', music:'🎵', festival:'🎪', market:'🛍️', conference:'🏛️', food:'🍽️' };
+  const emoji = emojis[category] || '📍';
+  return L.divIcon({
+    className: '',
+    html: `<div class="event-marker">${emoji}</div>`,
+    iconSize: [28, 28],
+    iconAnchor: [14, 14],
+  });
+}
+
+// ── Activity log ────────────────────────────────────────────────────────
+const logEl = document.getElementById('activity-log');
+const MAX_LOG = 40;
+
+function log(msg, color = '') {
+  const now = new Date().toLocaleTimeString('en-US', { hour12: false, hour:'2-digit', minute:'2-digit', second:'2-digit' });
+  const entry = document.createElement('div');
+  entry.className = 'log-entry';
+  entry.innerHTML = `<span class="log-time">${now}</span><span class="log-msg ${color}">${msg}</span>`;
+  logEl.prepend(entry);
+  while (logEl.children.length > MAX_LOG) logEl.removeChild(logEl.lastChild);
+}
+
+// ── State ───────────────────────────────────────────────────────────────
+let prevScheduleIds = new Set();
+let prevIdleIds     = new Set();
+let prevCycleCount  = 0;
+let waveToggle      = 0;
+
+// ── Main update ─────────────────────────────────────────────────────────
+async function refresh() {
+  let data;
+  try {
+    const res = await fetch('/api/v1/dashboard');
+    if (!res.ok) throw new Error(res.statusText);
+    data = await res.json();
+  } catch (e) {
+    log(`API error: ${e.message}`, 'red');
+    return;
+  }
+
+  const { fleet, schedules, loop, idle_carts } = data;
+
+  // ── Sidebar stats ──────────────────────────────────────────────────
+  const running = loop.running;
+  const badge   = document.getElementById('loop-badge');
+  const dot     = document.getElementById('loop-dot');
+  badge.className = running ? 'loop-badge' : 'loop-badge stopped';
+  dot.className   = running ? 'pulse-dot'  : 'pulse-dot red';
+  document.getElementById('loop-label').textContent   = running ? 'Running' : 'Stopped';
+  document.getElementById('stat-cycles').textContent  = loop.cycle_count ?? '—';
+  document.getElementById('stat-interval').textContent = loop.config ? `${loop.config.interval_seconds}s` : '—';
+
+  const lastRun = loop.last_run_at
+    ? new Date(loop.last_run_at + 'Z').toLocaleTimeString()
+    : '—';
+  document.getElementById('stat-last-run').textContent = lastRun;
+
+  const idle    = fleet.status_breakdown?.idle    ?? 0;
+  const enroute = fleet.status_breakdown?.en_route ?? 0;
+  document.getElementById('stat-idle').textContent    = idle;
+  document.getElementById('stat-enroute').textContent = enroute;
+  document.getElementById('stat-total').textContent   = fleet.total_carts ?? '—';
+  document.getElementById('stat-jobs').textContent    = schedules.length;
+
+  // ── Detect new cycles ──────────────────────────────────────────────
+  if (loop.cycle_count > prevCycleCount) {
+    const recent = loop.recent_cycles ?? [];
+    const last   = recent[recent.length - 1];
+    if (last) {
+      const expired = last.expired_schedules || 0;
+      const created = last.schedules_created || 0;
+      const evts    = last.events_found || 0;
+      log(`Cycle #${last.cycle}: ${evts} events · ${created} deployed · ${expired} freed`, 'blue');
+    }
+    prevCycleCount = loop.cycle_count;
+  }
+
+  // ── Wave badge ─────────────────────────────────────────────────────
+  const wave = Math.floor(Date.now() / 60000) % 2;
+  document.getElementById('ov-wave').textContent = wave === 0 ? 'A — Central SLC' : 'B — South / East SLC';
+
+  // ── Revenue ────────────────────────────────────────────────────────
+  const totalRev = schedules.reduce((sum, s) => sum + (s.estimated_revenue || 0), 0);
+  document.getElementById('ov-revenue').textContent = totalRev > 0
+    ? '$' + Math.round(totalRev).toLocaleString()
+    : '$—';
+
+  // ── Event markers ──────────────────────────────────────────────────
+  const seenEventIds = new Set();
+  for (const s of schedules) {
+    const eid = s.event_name;  // use name as key (no real event_id in schedule)
+    seenEventIds.add(eid);
+
+    if (!eventMarkers[eid]) {
+      const m = L.marker([s.coordinates.lat, s.coordinates.lng], { icon: eventIcon(s.category) })
+        .addTo(map)
+        .bindPopup(`
+          <b>${s.event_name}</b><br>
+          📍 ${s.location}<br>
+          🕐 Departs ${new Date(s.departure_time + 'Z').toLocaleTimeString()}
+        `);
+      eventMarkers[eid] = m;
+    }
+  }
+
+  // Remove stale event markers
+  for (const eid of Object.keys(eventMarkers)) {
+    if (!seenEventIds.has(eid)) {
+      eventMarkers[eid].remove();
+      delete eventMarkers[eid];
+    }
+  }
+
+  // ── En-route cart markers (from schedules) ─────────────────────────
+  const seenCartIds = new Set();
+
+  for (const s of schedules) {
+    const cid = s.cart_id;
+    seenCartIds.add(cid);
+    const lat = s.coordinates.lat;
+    const lng = s.coordinates.lng;
+
+    if (!cartMarkers[cid]) {
+      const marker = L.marker([lat, lng], { icon: cartIcon('en_route') })
+        .addTo(map)
+        .bindPopup(`
+          <b>${cid.slice(0, 8)}…</b><br>
+          🎯 ${s.event_name}<br>
+          💰 Est. $${Math.round(s.estimated_revenue || 0).toLocaleString()}
+        `);
+
+      // Line from staging (no fixed staging lat — just marker for now)
+      cartMarkers[cid] = { marker, line: null };
+      log(`🛺 Cart deployed → ${s.event_name}`, 'green');
+    } else {
+      const m = cartMarkers[cid].marker;
+      m.setLatLng([lat, lng]);
+      m.setIcon(cartIcon('en_route'));
+      m.setPopupContent(`
+        <b>${cid.slice(0, 8)}…</b><br>
+        🎯 ${s.event_name}<br>
+        💰 Est. $${Math.round(s.estimated_revenue || 0).toLocaleString()}
+      `);
+    }
+  }
+
+  // ── Idle cart markers ──────────────────────────────────────────────
+  const currentIdleIds = new Set();
+  for (const c of idle_carts) {
+    if (!c.lat || !c.lng) continue;
+    currentIdleIds.add(c.id);
+    seenCartIds.add(c.id);
+
+    if (!cartMarkers[c.id]) {
+      const marker = L.marker([c.lat, c.lng], { icon: cartIcon('idle') })
+        .addTo(map)
+        .bindPopup(`<b>${c.name}</b><br>⚡ Idle — awaiting assignment`);
+      cartMarkers[c.id] = { marker, line: null };
+    } else {
+      const m = cartMarkers[c.id].marker;
+      m.setLatLng([c.lat, c.lng]);
+      m.setIcon(cartIcon('idle'));
+      m.setPopupContent(`<b>${c.name}</b><br>⚡ Idle — awaiting assignment`);
+    }
+
+    // Log newly idle carts (just returned from deployment)
+    if (!prevIdleIds.has(c.id) && prevScheduleIds.size > 0) {
+      log(`✅ Cart returned to idle`, 'orange');
+    }
+  }
+
+  // Remove markers for carts no longer present
+  for (const cid of Object.keys(cartMarkers)) {
+    if (!seenCartIds.has(cid)) {
+      cartMarkers[cid].marker.remove();
+      if (cartMarkers[cid].line) cartMarkers[cid].line.remove();
+      delete cartMarkers[cid];
+    }
+  }
+
+  prevIdleIds     = currentIdleIds;
+  prevScheduleIds = new Set(schedules.map(s => s.schedule_id));
+
+  // ── Schedule list ──────────────────────────────────────────────────
+  const listEl = document.getElementById('schedule-list');
+  document.getElementById('schedule-count').textContent = schedules.length;
+
+  if (schedules.length === 0) {
+    listEl.innerHTML = '<div style="color:var(--muted);font-size:12px;text-align:center;padding:12px">No active deployments</div>';
+  } else {
+    listEl.innerHTML = schedules.map(s => {
+      const departs = new Date(s.departure_time + 'Z').toLocaleTimeString([], { hour:'2-digit', minute:'2-digit' });
+      const rev = s.estimated_revenue ? '$' + Math.round(s.estimated_revenue).toLocaleString() : '—';
+      return `
+        <div class="schedule-item" onclick="flyTo(${s.coordinates.lat}, ${s.coordinates.lng})">
+          <div class="event-name">${s.event_name}</div>
+          <div class="meta">
+            <span>📍 ${s.location}</span>
+            <span class="rev">${rev}</span>
+          </div>
+          <div class="meta">
+            <span>🕐 departs ${departs}</span>
+            <span style="color:var(--blue)">🛺 ${s.cart_id.slice(0,8)}…</span>
+          </div>
+        </div>`;
+    }).join('');
+  }
+}
+
+function flyTo(lat, lng) {
+  map.flyTo([lat, lng], 15, { animate: true, duration: 0.8 });
+}
+
+// ── Poll every 5 seconds ──────────────────────────────────────────────
+const POLL_MS = 5000;
+
+function animateBar() {
+  const bar = document.getElementById('refresh-bar');
+  bar.style.transition = 'none';
+  bar.style.transform  = 'scaleX(0)';
+  requestAnimationFrame(() => {
+    bar.style.transition = `transform ${POLL_MS}ms linear`;
+    bar.style.transform  = 'scaleX(1)';
+  });
+}
+
+async function tick() {
+  await refresh();
+  animateBar();
+  setTimeout(tick, POLL_MS);
+}
+
+// Initial log
+log('Fleet command dashboard online', 'green');
+log('Connecting to autonomous loop…', 'blue');
+
+tick();
+</script>
+</body>
+</html>

@@ -1,8 +1,11 @@
 import logging
 import os
 from contextlib import asynccontextmanager
+from pathlib import Path
 
 from fastapi import FastAPI
+from fastapi.staticfiles import StaticFiles
+from fastapi.responses import FileResponse
 from dotenv import load_dotenv
 
 from .routes import router
@@ -41,4 +44,15 @@ def create_app() -> FastAPI:
         lifespan=lifespan,
     )
     app.include_router(router, prefix="/api/v1")
+
+    # Serve the dashboard UI from /ui
+    ui_dir = Path(__file__).parent.parent.parent / "ui"
+    if ui_dir.exists():
+        app.mount("/ui", StaticFiles(directory=ui_dir, html=True), name="ui")
+
+    # Root redirect to dashboard
+    @app.get("/", include_in_schema=False)
+    async def root():
+        return FileResponse(ui_dir / "index.html")
+
     return app
