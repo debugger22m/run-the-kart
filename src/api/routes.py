@@ -6,7 +6,7 @@ from fastapi import APIRouter, Body, HTTPException, Request
 from pydantic import BaseModel
 
 from ..models import Cart, Coordinates
-from ..models.cart import CartStatus
+from ..models.cart import CartStatus, CartType
 from .state import AppState
 from .loop import LoopConfig
 
@@ -23,6 +23,7 @@ def get_state(request: Request) -> AppState:
 
 class AddCartRequest(BaseModel):
     name: str
+    cart_type: CartType
     latitude: float
     longitude: float
     max_orders_per_hour: int = 50
@@ -80,6 +81,7 @@ async def add_cart(request: Request, body: AddCartRequest):
     state = get_state(request)
     cart = Cart(
         name=body.name,
+        cart_type=body.cart_type,
         current_location=Coordinates(lat=body.latitude, lng=body.longitude),
         max_orders_per_hour=body.max_orders_per_hour,
     )
